@@ -1,8 +1,12 @@
 import { Callbacks, Client } from "@colyseus/sdk";
 import catalog from "./catalog.json" with { type: "json" };
 const $ = (s) => document.querySelector(s);
-const apiProtocol = location.protocol === "https:" ? "https" : "http";
-const apiBase = `${apiProtocol}://${location.hostname}:2567`;
+const isLocal =
+  location.hostname === "localhost" || location.hostname === "127.0.0.1";
+
+const apiBase = isLocal
+  ? `http://${location.hostname}:2567`
+  : "https://bancomundoonline.onrender.com";
 let room,
   me,
   pin = "",
@@ -36,8 +40,10 @@ function init() {
 }
 async function connect(create, override) {
   try {
-    const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-    const wsUrl = `${wsProtocol}://${location.hostname}:2567`;
+    const wsUrl = isLocal
+      ? `ws://${location.hostname}:2567`
+      : "wss://bancomundoonline.onrender.com";
+    ``;
     const client = new Client(wsUrl),
       data = override || {
         name: $("#name").value,
@@ -367,10 +373,7 @@ $("#pause").onclick = () =>
   confirm("Pausar e salvar a partida para continuar outro dia?") &&
   room.send("pause_room");
 $("#backup").onclick = () =>
-  window.open(
-    `${apiBase}/api/saves/${room.state.saveCode}`,
-    "_blank",
-  );
+  window.open(`${apiBase}/api/saves/${room.state.saveCode}`, "_blank");
 $("#report").onclick = () => room.send("report");
 $("#end").onclick = () => $("#endModal").classList.remove("hidden");
 $("#endBack").onclick = () => $("#endModal").classList.add("hidden");
@@ -457,9 +460,7 @@ init();
 
 async function loadSaves() {
   try {
-    const list = await fetch(`${apiBase}/api/saves`).then((r) =>
-      r.json(),
-    );
+    const list = await fetch(`${apiBase}/api/saves`).then((r) => r.json());
     $("#savedGames").innerHTML = list.length
       ? list
           .map(
