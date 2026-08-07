@@ -1,5 +1,7 @@
 import { Client, Room } from "@colyseus/core";
+
 import { Asset, Debt, Event, Pending, Player, State } from "./state.js";
+
 import {
   atomicSave,
   code,
@@ -7,32 +9,52 @@ import {
   loadSaveWithFallback,
   restore,
 } from "./persistence.js";
-const t = (v: unknown, n = 120) =>
-    String(v ?? "")
-      .trim()
-      .slice(0, n),
-  uid = () => crypto.randomUUID();
-export class BankRoom extends Room<{ state: State }> {
+
+const t = (value: unknown, maxLength = 120) =>
+  String(value ?? "")
+    .trim()
+    .slice(0, maxLength);
+
+const uid = () => crypto.randomUUID();
+
+export class BankRoom extends Room<{
+  state: State;
+}> {
   maxClients = 6;
   autoDispose = false;
+
   private pin = "";
   private pinHash = "";
+
   private kicked = new Set<string>();
-  private saveTimer: any;
-  async onCreate(o: { pin?: string; resumeCode?: string }) {
-    if (o.resumeCode) {
-      const raw = await loadSaveWithFallback(t(o.resumeCode, 30));
+
+  private processedRequests = new Set<string>();
+
+  private processingAssets = new Set<string>();
+
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async onCreate(options: { pin?: string; resumeCode?: string }) {
+    if (options.resumeCode) {
+      const raw = await loadSaveWithFallback(t(options.resumeCode, 30));
+
       this.pinHash = raw.pinHash || "";
+
       this.setState(restore(raw));
     } else {
-      this.pin = t(o.pin, 8);
+      this.pin = t(options.pin, 8);
       this.pinHash = hash(this.pin);
-      const st = new State();
-      st.saveCode = code();
-      this.setState(st);
+
+      const state = new State();
+
+      state.saveCode = code();
+
+      this.setState(state);
+
       this.saveNow();
     }
-    const map: any = {
+
+    const handlers: Record<string, (client: Client, data: any) => void> = {
       money: this.money,
       bank: this.bank,
       asset: this.asset,
@@ -54,545 +76,1280 @@ export class BankRoom extends Room<{ state: State }> {
       end_room: this.endRoom,
       pause_room: this.pauseRoom,
     };
-    for (const [k, f] of Object.entries(map))
-      this.onMessage(k, (c, d) => {
-        (f as any).call(this, c, d);
+
+    for (const [message, handler] of Object.entries(handlers)) {
+      this.onMessage(message, (client: Client, data: any) => {
+        handler.call(this, client, data);
+
         this.scheduleSave();
       });
-    this.setSimulationInterval(() => this.scheduleSave(), 30000);
+    }
+
+    this.setSimulationInterval(() => {
+      this.scheduleSave();
+    }, 30000);
   }
-  onAuth(_c: Client, o: { pin?: string }) {
-    if (this.state?.locked) throw Error("Sala bloqueada para novas entradas.");
-    if (this.pinHash && hash(t(o.pin, 8)) !== this.pinHash)
+
+  onAuth(
+    _client: Client,
+    options: {
+      pin?: string;
+    },
+  ) {
+    if (this.state?.locked) {
+      throw Error("Sala bloqueada para novas entradas.");
+    }
+
+    if (this.pinHash && hash(t(options.pin, 8)) !== this.pinHash) {
       throw Error("PIN incorreto.");
+    }
+
     return true;
   }
+
   onJoin(
-    c: Client,
-    o: {
+    client: Client,
+    options: {
       name?: string;
       initialBalance?: number;
       deviceToken?: string;
       recoveryCode?: string;
     },
   ) {
-    if (this.state.ended) throw Error("Sala encerrada.");
-    const token = t(o.deviceToken, 80),
-      recovery = t(o.recoveryCode, 30);
-    const found = [...this.state.players.entries()].find(
-      ([, p]) =>
-        (token && p.deviceToken === token) ||
-        (recovery && p.recoveryCode === recovery),
+    if (this.state.ended) {
+      throw Error("Sala encerrada.");
+    }
+
+    const deviceToken = t(options.deviceToken, 80);
+
+    const recoveryCode = t(options.recoveryCode, 30);
+
+    const previousProfile = [...this.state.players.entries()].find(
+      ([, player]) =>
+        (deviceToken && player.deviceToken === deviceToken) ||
+        (recoveryCode && player.recoveryCode === recoveryCode),
     );
-    if (found) {
-      const [oldId, p] = found;
-      if (oldId !== c.sessionId) {
-        this.state.players.delete(oldId);
-        p.id = c.sessionId;
-        this.state.players.set(c.sessionId, p);
-        for (const q of this.state.pending.values()) {
-          if (q.fromId === oldId) q.fromId = c.sessionId;
-          if (q.toId === oldId) q.toId = c.sessionId;
+
+    if (previousProfile) {
+      const [oldSessionId, player] = previousProfile;
+
+      if (oldSessionId !== client.sessionId) {
+        this.state.players.delete(oldSessionId);
+
+        player.id = client.sessionId;
+
+        this.state.players.set(client.sessionId, player);
+
+        for (const request of this.state.pending.values()) {
+          if (request.fromId === oldSessionId) {
+            request.fromId = client.sessionId;
+          }
+
+          if (request.toId === oldSessionId) {
+            request.toId = client.sessionId;
+          }
         }
-        for (const q of this.state.debts.values()) {
-          if (q.debtorId === oldId) q.debtorId = c.sessionId;
-          if (q.creditorId === oldId) q.creditorId = c.sessionId;
+
+        for (const agreement of this.state.debts.values()) {
+          if (agreement.debtorId === oldSessionId) {
+            agreement.debtorId = client.sessionId;
+          }
+
+          if (agreement.creditorId === oldSessionId) {
+            agreement.creditorId = client.sessionId;
+          }
         }
-        if (this.state.hostId === oldId) this.state.hostId = c.sessionId;
+
+        if (this.state.hostId === oldSessionId) {
+          this.state.hostId = client.sessionId;
+        }
       }
-      p.connected = true;
+
+      player.connected = true;
+
       this.ev(
         "presence",
-        p.name,
-        `${p.name} recuperou o perfil salvo.`,
-        `info`,
+        player.name,
+        `${player.name} recuperou o perfil salvo.`,
+        "info",
       );
-      c.send("profile_recovered", {
-        name: p.name,
-        recoveryCode: p.recoveryCode,
+
+      client.send("profile_recovered", {
+        name: player.name,
+        recoveryCode: player.recoveryCode,
       });
+
       this.saveNow();
+
       return;
     }
-    if (this.state.players.size >= this.state.maxPlayers)
+
+    if (this.state.players.size >= this.state.maxPlayers) {
       throw Error("Limite oficial de 6 jogadores.");
-    const p = new Player();
-    p.id = c.sessionId;
-    p.deviceToken = token || uid();
-    p.recoveryCode = code();
-    p.name = t(o.name, 24) || "Jogador";
-    p.balance = Math.max(0, Number(o.initialBalance) || 2558000);
-    this.state.players.set(p.id, p);
-    if (!this.state.hostId) this.state.hostId = p.id;
-    this.ev("presence", p.name, `${p.name} entrou na sala.`, `info`);
-    c.send("profile_recovered", { name: p.name, recoveryCode: p.recoveryCode });
+    }
+
+    const player = new Player();
+
+    player.id = client.sessionId;
+
+    player.deviceToken = deviceToken || uid();
+
+    player.recoveryCode = code();
+
+    player.name = t(options.name, 24) || "Jogador";
+
+    player.balance = Math.max(0, Number(options.initialBalance) || 2558000);
+
+    this.state.players.set(player.id, player);
+
+    if (!this.state.hostId) {
+      this.state.hostId = player.id;
+    }
+
+    this.ev("presence", player.name, `${player.name} entrou na sala.`, "info");
+
+    client.send("profile_recovered", {
+      name: player.name,
+      recoveryCode: player.recoveryCode,
+    });
+
     this.saveNow();
   }
-  async onDrop(c: Client) {
-    const p = this.state.players.get(c.sessionId);
-    if (p) {
-      p.connected = false;
+
+  async onDrop(client: Client) {
+    const player = this.state.players.get(client.sessionId);
+
+    if (player) {
+      player.connected = false;
+
       this.ev(
         "presence",
-        p.name,
-        `${p.name} perdeu a conexão; vaga reservada por 60 segundos.`,
-        `info`,
+        player.name,
+        `${player.name} perdeu a conexão; vaga reservada por 60 segundos.`,
+        "info",
       );
     }
-    await this.allowReconnection(c, 60);
+
+    await this.allowReconnection(client, 60);
   }
-  onReconnect(c: Client) {
-    const p = this.state.players.get(c.sessionId);
-    if (p) {
-      p.connected = true;
-      this.ev("presence", p.name, `${p.name} reconectou à sala.`, `info`);
-    }
-  }
-  onLeave(c: Client) {
-    const p = this.state.players.get(c.sessionId);
-    if (!p) return;
-    if (this.kicked.delete(c.sessionId)) {
-      this.clearPlayer(c.sessionId);
-      this.state.players.delete(c.sessionId);
-      this.saveNow();
+
+  onReconnect(client: Client) {
+    const player = this.state.players.get(client.sessionId);
+
+    if (!player) {
       return;
     }
-    p.connected = false;
+
+    player.connected = true;
+
     this.ev(
       "presence",
-      p.name,
-      `${p.name} saiu; perfil preservado para continuação.`,
-      `info`,
+      player.name,
+      `${player.name} reconectou à sala.`,
+      "info",
     );
-    if (this.state.hostId === p.id) this.assignAdmin(p.name);
+  }
+
+  onLeave(client: Client) {
+    const player = this.state.players.get(client.sessionId);
+
+    if (!player) {
+      return;
+    }
+
+    if (this.kicked.delete(client.sessionId)) {
+      this.clearPlayer(client.sessionId);
+
+      this.state.players.delete(client.sessionId);
+
+      this.saveNow();
+
+      return;
+    }
+
+    player.connected = false;
+
+    this.ev(
+      "presence",
+      player.name,
+      `${player.name} saiu; perfil preservado para continuação.`,
+      "info",
+    );
+
+    if (this.state.hostId === player.id) {
+      this.assignAdmin(player.name);
+    }
+
     this.saveNow();
   }
-  private me(c: Client) {
-    const p = this.state.players.get(c.sessionId);
-    if (!p) throw Error("Jogador inválido.");
-    return p;
+
+  private me(client: Client) {
+    const player = this.state.players.get(client.sessionId);
+
+    if (!player) {
+      throw Error("Jogador inválido.");
+    }
+
+    return player;
   }
-  private adm(c: Client) {
-    if (c.sessionId !== this.state.hostId) {
-      c.send("error", "Somente o ADM pode realizar esta ação.");
+
+  private adm(client: Client) {
+    if (client.sessionId !== this.state.hostId) {
+      client.send("error", "Somente o ADM pode realizar esta ação.");
+
       return false;
     }
+
     return true;
   }
-  private ev(cat: string, actor: string, msg: string, type: string) {
-    const e = new Event();
-    e.seq = ++this.state.seq;
-    e.category = cat;
-    e.actor = actor;
-    e.message = msg;
-    e.type = type;
-    e.at = Date.now();
-    this.state.events.push(e);
-    while (this.state.events.length > 250) this.state.events.shift();
+
+  private ev(category: string, actor: string, message: string, type: string) {
+    const event = new Event();
+
+    event.seq = ++this.state.seq;
+
+    event.category = category;
+    event.actor = actor;
+    event.message = message;
+    event.type = type;
+    event.at = Date.now();
+
+    this.state.events.push(event);
+
+    while (this.state.events.length > 250) {
+      this.state.events.shift();
+    }
   }
-  private assignAdmin(old: string) {
-    const n =
-      [...this.state.players.values()].find((x) => x.connected) ??
+
+  private assignAdmin(previousAdminName: string) {
+    const nextAdmin =
+      [...this.state.players.values()].find((player) => player.connected) ??
       [...this.state.players.values()][0];
-    if (n) {
-      this.state.hostId = n.id;
-      this.ev(
-        "admin",
-        n.name,
-        `${old} saiu; ${n.name} agora é o ADM.`,
-        `settings`,
-      );
-    } else this.state.hostId = "";
+
+    if (!nextAdmin) {
+      this.state.hostId = "";
+
+      return;
+    }
+
+    this.state.hostId = nextAdmin.id;
+
+    this.ev(
+      "admin",
+      nextAdmin.name,
+      `${previousAdminName} saiu; ${nextAdmin.name} agora é o ADM.`,
+      "settings",
+    );
   }
-  private clearPlayer(id: string) {
-    for (const [k, q] of this.state.pending)
-      if (q.fromId === id || q.toId === id) this.state.pending.delete(k);
-    for (const [k, q] of this.state.debts)
-      if (q.debtorId === id || q.creditorId === id) this.state.debts.delete(k);
+
+  private clearPlayer(playerId: string) {
+    for (const [requestId, request] of this.state.pending) {
+      if (request.fromId === playerId || request.toId === playerId) {
+        this.state.pending.delete(requestId);
+      }
+    }
+
+    for (const [agreementId, agreement] of this.state.debts) {
+      if (
+        agreement.debtorId === playerId ||
+        agreement.creditorId === playerId
+      ) {
+        this.state.debts.delete(agreementId);
+      }
+    }
   }
-  private pend(kind: string, p: Player, to: Player | undefined, d: any) {
-    const q = new Pending();
-    q.id = uid();
-    q.kind = kind;
-    q.fromId = p.id;
-    q.fromName = p.name;
-    q.toId = to?.id ?? this.state.hostId;
-    q.toName = to?.name ?? "ADM";
-    q.amount = Number(d.amount) || 0;
-    q.catalogId = t(d.catalogId, 50);
-    q.name = t(d.name, 80);
-    q.development = Math.max(0, Math.min(5, Number(d.development) || 0));
-    q.mortgaged = !!d.mortgaged;
-    q.purchase = Math.max(0, Number(d.purchase) || 0);
-    q.houseCost = Math.max(0, Number(d.houseCost) || 0);
-    q.condominiumCost = Math.max(0, Number(d.condominiumCost) || 0);
-    q.mortgageValue = Math.max(0, Number(d.mortgageValue) || 0);
-    q.reason = t(d.reason);
-    q.at = Date.now();
-    this.state.pending.set(q.id, q);
-    return q;
+
+  private pend(
+    kind: string,
+    player: Player,
+    destination: Player | undefined,
+    data: any,
+  ) {
+    const request = new Pending();
+
+    request.id = uid();
+    request.kind = kind;
+
+    request.fromId = player.id;
+    request.fromName = player.name;
+
+    request.toId = destination?.id ?? this.state.hostId;
+
+    request.toName = destination?.name ?? "ADM";
+
+    request.amount = Number(data.amount) || 0;
+
+    request.catalogId = t(data.catalogId, 50);
+
+    request.name = t(data.name, 80);
+
+    request.development = Math.max(
+      0,
+      Math.min(5, Number(data.development) || 0),
+    );
+
+    request.mortgaged = !!data.mortgaged;
+
+    request.purchase = Math.max(0, Number(data.purchase) || 0);
+
+    request.houseCost = Math.max(0, Number(data.houseCost) || 0);
+
+    request.condominiumCost = Math.max(0, Number(data.condominiumCost) || 0);
+
+    request.mortgageValue = Math.max(0, Number(data.mortgageValue) || 0);
+
+    request.reason = t(data.reason);
+
+    request.at = Date.now();
+
+    this.state.pending.set(request.id, request);
+
+    return request;
   }
-  private money(c: Client, d: any) {
-    const p = this.me(c),
-      to = this.state.players.get(t(d.to, 50)),
-      v = Number(d.amount) || 0;
-    if (!to || v <= 0 || p.balance < v)
-      return c.send("error", "Pagamento inválido.");
-    this.pend("money", p, to, d);
+
+  private findCatalogOwner(catalogId: string) {
+    if (!catalogId) {
+      return undefined;
+    }
+
+    for (const player of this.state.players.values()) {
+      const asset = player.assets.find((item) => item.catalogId === catalogId);
+
+      if (asset) {
+        return player;
+      }
+    }
+
+    return undefined;
+  }
+
+  private hasPendingCatalogRequest(catalogId: string) {
+    if (!catalogId) {
+      return false;
+    }
+
+    for (const request of this.state.pending.values()) {
+      if (request.kind === "asset" && request.catalogId === catalogId) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private money(client: Client, data: any) {
+    const player = this.me(client);
+
+    const destination = this.state.players.get(t(data.to, 50));
+
+    const amount = Number(data.amount) || 0;
+
+    if (!destination || amount <= 0 || player.balance < amount) {
+      return client.send("error", "Pagamento inválido.");
+    }
+
+    this.pend("money", player, destination, data);
+
     this.ev(
       "money",
-      p.name,
-      `${p.name} solicitou pagar ${v.toLocaleString("pt-BR")} a ${to.name}.`,
-      `pending`,
+      player.name,
+      `${player.name} solicitou pagar ${amount.toLocaleString("pt-BR")} a ${destination.name}.`,
+      "pending",
     );
   }
-  private bank(c: Client, d: any) {
-    const p = this.me(c),
-      v = Number(d.amount) || 0;
-    if (!v || !d.reason) return c.send("error", "Valor e motivo obrigatórios.");
-    this.pend("bank", p, this.state.players.get(this.state.hostId), d);
+
+  private bank(client: Client, data: any) {
+    const player = this.me(client);
+
+    const amount = Number(data.amount) || 0;
+
+    if (!amount || !data.reason) {
+      return client.send("error", "Valor e motivo obrigatórios.");
+    }
+
+    this.pend("bank", player, this.state.players.get(this.state.hostId), data);
+
     this.ev(
       "bank",
-      p.name,
-      `${p.name} solicitou operação de ${v.toLocaleString("pt-BR")} com o banco.`,
-      `pending`,
+      player.name,
+      `${player.name} solicitou operação de ${amount.toLocaleString("pt-BR")} com o banco.`,
+      "pending",
     );
   }
-  private asset(c: Client, d: any) {
-    const p = this.me(c);
-    if (!d.name || !d.reason)
-      return c.send("error", "Item e motivo obrigatórios.");
-    const q = this.pend(
-      "asset",
-      p,
-      this.state.players.get(this.state.hostId),
-      d,
-    );
-    this.ev(
-      d.kind,
-      p.name,
-      `${p.name} solicitou ${q.name}${d.kind === "property" ? ` com ${q.development === 5 ? "Condomínio" : q.development + " casas"}` : ""}.`,
-      `pending`,
-    );
-  }
-  private respond(c: Client, d: any) {
-    const u = this.me(c),
-      q = this.state.pending.get(t(d.id, 50));
-    if (!q) return;
-    if (q.kind === "money" && q.toId !== u.id) return;
-    if (q.kind !== "money" && !this.adm(c)) return;
-    const p = this.state.players.get(q.fromId);
-    if (!p) return;
-    if (!d.accept) {
-      this.ev(
-        q.kind,
-        u.name,
-        `${u.name} recusou solicitação de ${p.name}.`,
-        `rejected`,
+
+  private asset(client: Client, data: any) {
+    const player = this.me(client);
+
+    const catalogId = t(data.catalogId, 50);
+
+    const itemName = t(data.name, 80);
+
+    if (!catalogId || !itemName || !data.reason) {
+      return client.send(
+        "error",
+        "Item, identificador e motivo são obrigatórios.",
       );
-      this.state.pending.delete(q.id);
+    }
+
+    const currentOwner = this.findCatalogOwner(catalogId);
+
+    if (currentOwner) {
+      return client.send(
+        "error",
+        `${itemName} já pertence a ${currentOwner.name}.`,
+      );
+    }
+
+    if (this.hasPendingCatalogRequest(catalogId)) {
+      return client.send(
+        "error",
+        `${itemName} já possui uma solicitação de compra pendente.`,
+      );
+    }
+
+    const request = this.pend(
+      "asset",
+      player,
+      this.state.players.get(this.state.hostId),
+      data,
+    );
+
+    this.ev(
+      data.kind,
+      player.name,
+      `${player.name} solicitou ${request.name}${
+        data.kind === "property"
+          ? ` com ${
+              request.development === 5
+                ? "Condomínio"
+                : request.development + " casas"
+            }`
+          : ""
+      }.`,
+      "pending",
+    );
+  }
+
+  private respond(client: Client, data: any) {
+    const responder = this.me(client);
+
+    const requestId = t(data.id, 50);
+
+    if (!requestId || this.processedRequests.has(requestId)) {
       return;
     }
-    if (q.kind === "money") {
-      if (p.balance < q.amount) return c.send("error", "Saldo insuficiente.");
-      p.balance -= q.amount;
-      u.balance += q.amount;
-      p.sent += q.amount;
-      u.received += q.amount;
-    } else if (q.kind === "bank") {
-      if (p.balance + q.amount < 0)
-        return c.send("error", "Saldo insuficiente.");
-      p.balance += q.amount;
-      p.bankOps++;
-    } else {
-      const org = /^(ONU|OIT|OMC|OTAN|IPCC|OMS)$/.test(q.name);
-      const construction = org
-        ? 0
-        : q.development === 5
-          ? 4 * q.houseCost + q.condominiumCost
-          : q.development * q.houseCost;
-      const total = q.purchase + construction;
-      if (total <= 0 || p.balance < total)
-        return c.send(
-          "error",
-          `Saldo insuficiente ou custo inválido. Total: ${total.toLocaleString("pt-BR")}.`,
+
+    const request = this.state.pending.get(requestId);
+
+    if (!request) {
+      return;
+    }
+
+    if (request.kind === "money" && request.toId !== responder.id) {
+      return;
+    }
+
+    if (request.kind !== "money" && !this.adm(client)) {
+      return;
+    }
+
+    const player = this.state.players.get(request.fromId);
+
+    if (!player) {
+      this.state.pending.delete(request.id);
+
+      return;
+    }
+
+    this.processedRequests.add(request.id);
+
+    this.state.pending.delete(request.id);
+
+    if (!data.accept) {
+      this.ev(
+        request.kind,
+        responder.name,
+        `${responder.name} recusou solicitação de ${player.name}.`,
+        "rejected",
+      );
+
+      return;
+    }
+
+    if (request.kind === "money") {
+      if (request.amount <= 0 || player.balance < request.amount) {
+        client.send("error", "Saldo insuficiente ou pagamento inválido.");
+
+        this.ev(
+          "money",
+          responder.name,
+          `Pagamento de ${player.name} não foi realizado por saldo insuficiente ou valor inválido.`,
+          "rejected",
         );
-      p.balance -= total;
-      p.bankOps++;
-      const a = new Asset();
-      a.id = uid();
-      a.catalogId = q.catalogId;
-      a.kind = org ? "organization" : "property";
-      a.name = q.name;
-      a.development = q.development;
-      a.mortgaged = q.mortgaged;
-      a.purchase = q.purchase;
-      a.mortgage = q.mortgageValue;
-      p.assets.push(a);
+
+        return;
+      }
+
+      const previousPlayerBalance = player.balance;
+
+      const previousDestinationBalance = responder.balance;
+
+      try {
+        player.balance -= request.amount;
+
+        responder.balance += request.amount;
+
+        player.sent += request.amount;
+
+        responder.received += request.amount;
+
+        this.ev(
+          "money",
+          responder.name,
+          `${responder.name} aprovou pagamento de ${request.amount.toLocaleString("pt-BR")} enviado por ${player.name}.`,
+          "approved",
+        );
+      } catch (error) {
+        player.balance = previousPlayerBalance;
+
+        responder.balance = previousDestinationBalance;
+
+        throw error;
+      }
+
+      return;
+    }
+
+    if (request.kind === "bank") {
+      if (!request.amount || player.balance + request.amount < 0) {
+        client.send(
+          "error",
+          "Saldo insuficiente ou operação bancária inválida.",
+        );
+
+        this.ev(
+          "bank",
+          responder.name,
+          `Operação bancária de ${player.name} não foi realizada.`,
+          "rejected",
+        );
+
+        return;
+      }
+
+      const previousBalance = player.balance;
+
+      try {
+        player.balance += request.amount;
+
+        player.bankOps++;
+
+        this.ev(
+          "bank",
+          responder.name,
+          `${responder.name} aprovou operação bancária de ${request.amount.toLocaleString("pt-BR")} para ${player.name}.`,
+          "approved",
+        );
+      } catch (error) {
+        player.balance = previousBalance;
+
+        throw error;
+      }
+
+      return;
+    }
+
+    if (request.kind !== "asset") {
+      client.send("error", "Tipo de solicitação inválido.");
+
+      return;
+    }
+
+    const organization =
+      request.kind === "asset" &&
+      /^(ONU|OIT|OMC|OTAN|IPCC|OMS)$/.test(request.name);
+
+    const currentOwner = this.findCatalogOwner(request.catalogId);
+
+    if (currentOwner) {
       this.ev(
-        org ? "organization" : "property",
-        u.name,
-        `${u.name} aprovou ${q.name} para ${p.name}; total descontado ${total.toLocaleString("pt-BR")}.`,
-        `approved`,
+        organization ? "organization" : "property",
+        responder.name,
+        `${request.name} não foi aprovada para ${player.name}, pois já pertence a ${currentOwner.name}.`,
+        "rejected",
+      );
+
+      return client.send(
+        "error",
+        `${request.name} já pertence a ${currentOwner.name}. Nenhum valor foi descontado.`,
       );
     }
-    this.state.pending.delete(q.id);
-  }
-  private cancel(c: Client, d: any) {
-    const p = this.me(c),
-      q = this.state.pending.get(t(d.id, 50));
-    if (q && q.fromId === p.id) {
-      this.state.pending.delete(q.id);
+
+    const constructionCost = organization
+      ? 0
+      : request.development === 5
+        ? 4 * request.houseCost + request.condominiumCost
+        : request.development * request.houseCost;
+
+    const total = request.purchase + constructionCost;
+
+    if (total <= 0 || player.balance < total) {
       this.ev(
-        q.kind,
-        p.name,
-        `${p.name} cancelou uma solicitação.`,
-        `cancelled`,
+        organization ? "organization" : "property",
+        responder.name,
+        `${request.name} não foi aprovada para ${player.name} por saldo insuficiente ou custo inválido.`,
+        "rejected",
+      );
+
+      return client.send(
+        "error",
+        `Saldo insuficiente ou custo inválido. Total: ${total.toLocaleString("pt-BR")}.`,
+      );
+    }
+
+    const previousBalance = player.balance;
+
+    const asset = new Asset();
+
+    asset.id = uid();
+    asset.catalogId = request.catalogId;
+
+    asset.kind = organization ? "organization" : "property";
+
+    asset.name = request.name;
+
+    asset.development = organization ? 0 : request.development;
+
+    asset.mortgaged = request.mortgaged;
+
+    asset.purchase = request.purchase;
+
+    asset.mortgage = request.mortgageValue;
+
+    asset.houseCost = organization ? 0 : request.houseCost;
+
+    asset.condominiumCost = organization ? 0 : request.condominiumCost;
+
+    try {
+      player.balance -= total;
+
+      player.bankOps++;
+
+      player.assets.push(asset);
+
+      this.ev(
+        organization ? "organization" : "property",
+        responder.name,
+        `${responder.name} aprovou ${request.name} para ${player.name}; total descontado ${total.toLocaleString("pt-BR")}.`,
+        "approved",
+      );
+    } catch (error) {
+      player.balance = previousBalance;
+
+      const assetIndex = player.assets.findIndex(
+        (item) => item.id === asset.id,
+      );
+
+      if (assetIndex >= 0) {
+        player.assets.splice(assetIndex, 1);
+      }
+
+      throw error;
+    }
+  }
+
+  private cancel(client: Client, data: any) {
+    const player = this.me(client);
+
+    const request = this.state.pending.get(t(data.id, 50));
+
+    if (request && request.fromId === player.id) {
+      this.state.pending.delete(request.id);
+
+      this.ev(
+        request.kind,
+        player.name,
+        `${player.name} cancelou uma solicitação.`,
+        "cancelled",
       );
     }
   }
-  private development(c: Client, d: any) {
-    const p = this.me(c),
-      a = p.assets.find((x) => x.id === d.id),
-      v = Math.max(0, Math.min(5, Number(d.value) || 0));
-    if (!a || a.kind !== "property" || a.mortgaged)
-      return c.send("error", "Alteração bloqueada.");
-    a.development = v;
-    this.ev(
-      "property",
-      p.name,
-      `${p.name} alterou ${a.name} para ${v === 5 ? "Condomínio" : v + " casas"}.`,
-      `item`,
-    );
+
+  private development(client: Client, data: any) {
+    const player = this.me(client);
+
+    const assetId = t(data.id, 80);
+
+    if (!assetId || this.processingAssets.has(assetId)) {
+      return client.send("error", "Esta operação já está sendo processada.");
+    }
+
+    const asset = player.assets.find((item) => item.id === assetId);
+
+    if (!asset || asset.kind !== "property") {
+      return client.send("error", "Propriedade inválida.");
+    }
+
+    if (asset.mortgaged) {
+      return client.send(
+        "error",
+        "Não é possível construir ou vender construções em uma propriedade hipotecada.",
+      );
+    }
+
+    const currentDevelopment = asset.development;
+
+    const targetDevelopment = Number(data.value);
+
+    if (
+      !Number.isInteger(targetDevelopment) ||
+      targetDevelopment < 0 ||
+      targetDevelopment > 5
+    ) {
+      return client.send("error", "Nível de construção inválido.");
+    }
+
+    if (targetDevelopment === currentDevelopment) {
+      return client.send(
+        "error",
+        "A propriedade já está nesse nível de construção.",
+      );
+    }
+
+    if (Math.abs(targetDevelopment - currentDevelopment) !== 1) {
+      return client.send(
+        "error",
+        "Altere apenas um nível de construção por operação.",
+      );
+    }
+
+    if (asset.houseCost <= 0 || asset.condominiumCost <= 0) {
+      return client.send(
+        "error",
+        "Os custos oficiais de construção não estão disponíveis para esta propriedade.",
+      );
+    }
+
+    const buying = targetDevelopment > currentDevelopment;
+
+    let operationValue = 0;
+
+    let operationDescription = "";
+
+    if (buying) {
+      if (currentDevelopment === 4 && targetDevelopment === 5) {
+        operationValue = asset.condominiumCost;
+
+        operationDescription = "construiu um condomínio";
+      } else {
+        operationValue = asset.houseCost;
+
+        operationDescription = "comprou uma casa";
+      }
+
+      if (player.balance < operationValue) {
+        return client.send(
+          "error",
+          `Saldo insuficiente. Esta construção custa ${operationValue.toLocaleString("pt-BR")}.`,
+        );
+      }
+    } else {
+      if (currentDevelopment === 5 && targetDevelopment === 4) {
+        operationValue = Math.floor(asset.condominiumCost * 0.5);
+
+        operationDescription = "vendeu o condomínio";
+      } else {
+        operationValue = Math.floor(asset.houseCost * 0.5);
+
+        operationDescription = "vendeu uma casa";
+      }
+    }
+
+    if (operationValue <= 0) {
+      return client.send("error", "Valor da operação inválido.");
+    }
+
+    this.processingAssets.add(assetId);
+
+    const previousBalance = player.balance;
+
+    const previousDevelopment = asset.development;
+
+    try {
+      if (buying) {
+        player.balance -= operationValue;
+      } else {
+        player.balance += operationValue;
+      }
+
+      asset.development = targetDevelopment;
+
+      player.bankOps++;
+
+      this.ev(
+        "property",
+        player.name,
+        buying
+          ? `${player.name} ${operationDescription} em ${asset.name}; foram descontados ${operationValue.toLocaleString("pt-BR")}.`
+          : `${player.name} ${operationDescription} em ${asset.name}; foram devolvidos ${operationValue.toLocaleString("pt-BR")} ao saldo, correspondentes a 50% do valor oficial.`,
+        buying ? "purchase" : "sale",
+      );
+    } catch (error) {
+      player.balance = previousBalance;
+
+      asset.development = previousDevelopment;
+
+      throw error;
+    } finally {
+      this.processingAssets.delete(assetId);
+    }
   }
-  private mortgage(c: Client, d: any) {
-    const p = this.me(c),
-      a = p.assets.find((x) => x.id === d.id);
-    if (!a || a.development > 0)
-      return c.send("error", "Venda construções antes de hipotecar.");
-    a.mortgaged = !a.mortgaged;
+
+  private mortgage(client: Client, data: any) {
+    const player = this.me(client);
+
+    const asset = player.assets.find((item) => item.id === data.id);
+
+    if (!asset) {
+      return client.send("error", "Patrimônio inválido.");
+    }
+
+    if (asset.development > 0) {
+      return client.send(
+        "error",
+        "Venda todas as construções antes de hipotecar.",
+      );
+    }
+
+    asset.mortgaged = !asset.mortgaged;
+
     this.ev(
       "asset",
-      p.name,
-      `${p.name} ${a.mortgaged ? "hipotecou" : "retirou a hipoteca de"} ${a.name}.`,
-      `item`,
+      player.name,
+      `${player.name} ${
+        asset.mortgaged ? "hipotecou" : "retirou a hipoteca de"
+      } ${asset.name}.`,
+      "item",
     );
   }
-  private offer(c: Client, d: any) {
-    const p = this.me(c),
-      to = this.state.players.get(t(d.to, 50)),
-      a = p.assets.find((x) => x.id === d.assetId);
-    if (!to || !a || a.mortgaged || a.development > 0)
-      return c.send("error", "Somente item sem construção e não hipotecado.");
-    const q = this.pend("offer", p, to, { name: a.name, reason: "oferta" });
-    q.catalogId = a.id;
+
+  private offer(client: Client, data: any) {
+    const player = this.me(client);
+
+    const destination = this.state.players.get(t(data.to, 50));
+
+    const asset = player.assets.find((item) => item.id === data.assetId);
+
+    if (!destination || !asset || asset.mortgaged || asset.development > 0) {
+      return client.send(
+        "error",
+        "Somente item sem construção e não hipotecado.",
+      );
+    }
+
+    const request = this.pend("offer", player, destination, {
+      name: asset.name,
+      reason: "oferta",
+    });
+
+    request.catalogId = asset.id;
+
     this.ev(
       "asset",
-      p.name,
-      `${p.name} ofereceu ${a.name} para ${to.name}.`,
-      `pending`,
+      player.name,
+      `${player.name} ofereceu ${asset.name} para ${destination.name}.`,
+      "pending",
     );
   }
-  private debt(c: Client, d: any) {
-    const p = this.me(c),
-      to = this.state.players.get(t(d.creditorId, 50)),
-      cash = Math.max(0, Number(d.cashOffered) || 0),
-      ids = Array.isArray(d.assetIds)
-        ? d.assetIds.map((x: any) => t(x, 50))
-        : [];
-    if (!to || to.id === p.id || cash > p.balance)
-      return c.send("error", "Acordo inválido.");
-    const items: (Asset | undefined)[] = ids.map((x: string) =>
-      p.assets.find((a: Asset) => a.id === x),
+
+  private debt(client: Client, data: any) {
+    const player = this.me(client);
+
+    const creditor = this.state.players.get(t(data.creditorId, 50));
+
+    const cash = Math.max(0, Number(data.cashOffered) || 0);
+
+    const assetIds = Array.isArray(data.assetIds)
+      ? data.assetIds.map((id: unknown) => t(id, 50))
+      : [];
+
+    if (!creditor || creditor.id === player.id || cash > player.balance) {
+      return client.send("error", "Acordo inválido.");
+    }
+
+    const items: (Asset | undefined)[] = assetIds.map((id: string) =>
+      player.assets.find((asset) => asset.id === id),
     );
-    if (items.some((a) => !a || a.mortgaged || a.development > 0))
-      return c.send("error", "Item ausente, hipotecado ou com construção.");
-    for (const x of this.state.debts.values())
-      if ([...x.assetIds].some((i) => ids.includes(i)))
-        return c.send("error", "Item já usado em outro acordo.");
-    const q = new Debt();
-    q.id = uid();
-    q.debtorId = p.id;
-    q.debtorName = p.name;
-    q.creditorId = to.id;
-    q.creditorName = to.name;
-    q.originalAmount = Math.max(1, Number(d.originalAmount) || 0);
-    q.cashOffered = cash;
-    q.note = t(d.note);
-    q.at = Date.now();
-    ids.forEach((x: string) => q.assetIds.push(x));
-    this.state.debts.set(q.id, q);
+
+    if (
+      items.some((asset) => !asset || asset.mortgaged || asset.development > 0)
+    ) {
+      return client.send(
+        "error",
+        "Item ausente, hipotecado ou com construção.",
+      );
+    }
+
+    for (const agreement of this.state.debts.values()) {
+      if ([...agreement.assetIds].some((id) => assetIds.includes(id))) {
+        return client.send("error", "Item já usado em outro acordo.");
+      }
+    }
+
+    const agreement = new Debt();
+
+    agreement.id = uid();
+
+    agreement.debtorId = player.id;
+
+    agreement.debtorName = player.name;
+
+    agreement.creditorId = creditor.id;
+
+    agreement.creditorName = creditor.name;
+
+    agreement.originalAmount = Math.max(1, Number(data.originalAmount) || 0);
+
+    agreement.cashOffered = cash;
+
+    agreement.note = t(data.note);
+
+    agreement.at = Date.now();
+
+    assetIds.forEach((id: string) => agreement.assetIds.push(id));
+
+    this.state.debts.set(agreement.id, agreement);
+
     this.ev(
       "debt",
-      p.name,
-      `${p.name} propôs acordo para dívida de ${q.originalAmount.toLocaleString("pt-BR")}.`,
-      `pending`,
+      player.name,
+      `${player.name} propôs acordo para dívida de ${agreement.originalAmount.toLocaleString("pt-BR")}.`,
+      "pending",
     );
   }
-  private respondDebt(c: Client, d: any) {
-    const to = this.me(c),
-      q = this.state.debts.get(t(d.id, 50));
-    if (!q || q.creditorId !== to.id) return;
-    const from = this.state.players.get(q.debtorId);
-    if (!from) return;
-    if (!d.accept) {
-      this.state.debts.delete(q.id);
+
+  private respondDebt(client: Client, data: any) {
+    const creditor = this.me(client);
+
+    const agreementId = t(data.id, 50);
+
+    if (!agreementId || this.processedRequests.has(agreementId)) {
+      return;
+    }
+
+    const agreement = this.state.debts.get(agreementId);
+
+    if (!agreement || agreement.creditorId !== creditor.id) {
+      return;
+    }
+
+    const debtor = this.state.players.get(agreement.debtorId);
+
+    if (!debtor) {
+      this.state.debts.delete(agreement.id);
+
+      return;
+    }
+
+    this.processedRequests.add(agreement.id);
+
+    this.state.debts.delete(agreement.id);
+
+    if (!data.accept) {
       this.ev(
         "debt",
-        to.name,
-        `${to.name} recusou acordo de ${from.name}.`,
-        `rejected`,
+        creditor.name,
+        `${creditor.name} recusou acordo de ${debtor.name}.`,
+        "rejected",
       );
+
       return;
     }
-    if (from.balance < q.cashOffered)
-      return c.send("error", "Dinheiro indisponível.");
-    const items = [...q.assetIds].map((id) =>
-      from.assets.find((a) => a.id === id),
-    );
-    if (items.some((a) => !a || a.mortgaged || a.development > 0))
-      return c.send("error", "Acordo alterado; nada foi transferido.");
-    from.balance -= q.cashOffered;
-    to.balance += q.cashOffered;
-    for (const a of items as Asset[]) {
-      const i = from.assets.findIndex((x) => x.id === a.id);
-      from.assets.splice(i, 1);
-      to.assets.push(a);
+
+    if (debtor.balance < agreement.cashOffered) {
+      return client.send("error", "Dinheiro indisponível.");
     }
-    this.state.debts.delete(q.id);
-    this.ev(
-      "debt",
-      to.name,
-      `${to.name} aceitou acordo de ${from.name}; dívida encerrada.`,
-      `approved`,
+
+    const items = [...agreement.assetIds].map((id) =>
+      debtor.assets.find((asset) => asset.id === id),
     );
-  }
-  private cancelDebt(c: Client, d: any) {
-    const p = this.me(c),
-      q = this.state.debts.get(t(d.id, 50));
-    if (q && q.debtorId === p.id) {
-      this.state.debts.delete(q.id);
-      this.ev("debt", p.name, `${p.name} cancelou acordo.`, `cancelled`);
+
+    if (
+      items.some((asset) => !asset || asset.mortgaged || asset.development > 0)
+    ) {
+      return client.send("error", "Acordo alterado; nada foi transferido.");
+    }
+
+    const previousDebtorBalance = debtor.balance;
+
+    const previousCreditorBalance = creditor.balance;
+
+    const transferredAssets: {
+      asset: Asset;
+      originalIndex: number;
+    }[] = [];
+
+    try {
+      debtor.balance -= agreement.cashOffered;
+
+      creditor.balance += agreement.cashOffered;
+
+      for (const asset of items as Asset[]) {
+        const originalIndex = debtor.assets.findIndex(
+          (item) => item.id === asset.id,
+        );
+
+        if (originalIndex < 0) {
+          throw Error("Patrimônio do acordo não encontrado.");
+        }
+
+        transferredAssets.push({
+          asset,
+          originalIndex,
+        });
+
+        debtor.assets.splice(originalIndex, 1);
+
+        creditor.assets.push(asset);
+      }
+
+      this.ev(
+        "debt",
+        creditor.name,
+        `${creditor.name} aceitou acordo de ${debtor.name}; dívida encerrada.`,
+        "approved",
+      );
+    } catch (error) {
+      debtor.balance = previousDebtorBalance;
+
+      creditor.balance = previousCreditorBalance;
+
+      for (const { asset, originalIndex } of transferredAssets.reverse()) {
+        const creditorIndex = creditor.assets.findIndex(
+          (item) => item.id === asset.id,
+        );
+
+        if (creditorIndex >= 0) {
+          creditor.assets.splice(creditorIndex, 1);
+        }
+
+        debtor.assets.splice(originalIndex, 0, asset);
+      }
+
+      throw error;
     }
   }
-  private startBonus(c: Client) {
-    const p = this.me(c);
-    this.pend("bank", p, this.state.players.get(this.state.hostId), {
+
+  private cancelDebt(client: Client, data: any) {
+    const player = this.me(client);
+
+    const agreement = this.state.debts.get(t(data.id, 50));
+
+    if (agreement && agreement.debtorId === player.id) {
+      this.state.debts.delete(agreement.id);
+
+      this.ev(
+        "debt",
+        player.name,
+        `${player.name} cancelou acordo.`,
+        "cancelled",
+      );
+    }
+  }
+
+  private startBonus(client: Client) {
+    const player = this.me(client);
+
+    this.pend("bank", player, this.state.players.get(this.state.hostId), {
       amount: 200000,
       reason: "Passagem pelo Início",
     });
   }
-  private fmi(c: Client, d: any) {
-    const p = this.me(c),
-      sum = Math.max(2, Math.min(12, Number(d.sum) || 2)),
-      value = sum * 2000 * (d.kind === "debt" ? -1 : 1);
-    this.pend("bank", p, this.state.players.get(this.state.hostId), {
+
+  private fmi(client: Client, data: any) {
+    const player = this.me(client);
+
+    const diceSum = Math.max(2, Math.min(12, Number(data.sum) || 2));
+
+    const value = diceSum * 2000 * (data.kind === "debt" ? -1 : 1);
+
+    this.pend("bank", player, this.state.players.get(this.state.hostId), {
       amount: value,
-      reason: `FMI ${sum} × 2.000`,
+      reason: `FMI ${diceSum} × 2.000`,
     });
   }
-  private kick(c: Client, d: any) {
-    if (!this.adm(c)) return;
-    const id = t(d.id, 50),
-      p = this.state.players.get(id),
-      x = this.clients.find((v) => v.sessionId === id);
-    if (!p || !x || id === c.sessionId)
-      return c.send("error", "Jogador inválido.");
+
+  private kick(client: Client, data: any) {
+    if (!this.adm(client)) {
+      return;
+    }
+
+    const playerId = t(data.id, 50);
+
+    const player = this.state.players.get(playerId);
+
+    const connection = this.clients.find((item) => item.sessionId === playerId);
+
+    if (!player || !connection || playerId === client.sessionId) {
+      return client.send("error", "Jogador inválido.");
+    }
+
     this.ev(
       "admin",
-      this.me(c).name,
-      `${this.me(c).name} expulsou ${p.name}.`,
-      `settings`,
+      this.me(client).name,
+      `${this.me(client).name} expulsou ${player.name}.`,
+      "settings",
     );
-    this.kicked.add(id);
-    x.send("kicked", "Você foi expulso da sala pelo ADM.");
-    x.leave(4000);
+
+    this.kicked.add(playerId);
+
+    connection.send("kicked", "Você foi expulso da sala pelo ADM.");
+
+    connection.leave(4000);
   }
-  private removeOffline(c: Client, d: any) {
-    if (!this.adm(c)) return;
-    const id = t(d.id, 50),
-      p = this.state.players.get(id);
-    if (!p || p.connected)
-      return c.send("error", "O jogador não está offline.");
-    this.clearPlayer(id);
-    this.state.players.delete(id);
+
+  private removeOffline(client: Client, data: any) {
+    if (!this.adm(client)) {
+      return;
+    }
+
+    const playerId = t(data.id, 50);
+
+    const player = this.state.players.get(playerId);
+
+    if (!player || player.connected) {
+      return client.send("error", "O jogador não está offline.");
+    }
+
+    this.clearPlayer(playerId);
+
+    this.state.players.delete(playerId);
+
     this.ev(
       "admin",
-      this.me(c).name,
-      `${this.me(c).name} removeu ${p.name}, que estava offline.`,
-      `settings`,
+      this.me(client).name,
+      `${this.me(client).name} removeu ${player.name}, que estava offline.`,
+      "settings",
     );
   }
-  private toggleLock(c: Client) {
-    if (!this.adm(c)) return;
+
+  private toggleLock(client: Client) {
+    if (!this.adm(client)) {
+      return;
+    }
+
     this.state.locked = !this.state.locked;
-    if (this.state.locked) this.lock();
-    else this.unlock();
+
+    if (this.state.locked) {
+      this.lock();
+    } else {
+      this.unlock();
+    }
+
     this.ev(
       "admin",
-      this.me(c).name,
+      this.me(client).name,
       this.state.locked ? "Entradas bloqueadas." : "Entradas reabertas.",
       "settings",
     );
   }
-  private settings(c: Client, d: any) {
-    if (!this.adm(c)) return;
-    this.state.roomName = t(d.name, 50) || this.state.roomName;
+
+  private settings(client: Client, data: any) {
+    if (!this.adm(client)) {
+      return;
+    }
+
+    this.state.roomName = t(data.name, 50) || this.state.roomName;
+
     this.ev(
       "admin",
-      this.me(c).name,
+      this.me(client).name,
       "Nome da partida atualizado.",
       "settings",
     );
   }
-  private report(c: Client) {
-    if (!this.adm(c)) return;
-    c.send(
+
+  private report(client: Client) {
+    if (!this.adm(client)) {
+      return;
+    }
+
+    client.send(
       "report",
       JSON.stringify(
-        { version: "0.3.3", roomId: this.roomId, state: this.state },
+        {
+          version: "0.4.2",
+          roomId: this.roomId,
+          state: this.state,
+        },
         null,
         2,
       ),
     );
   }
-  private endRoom(c: Client) {
-    if (!this.adm(c)) return;
+
+  private endRoom(client: Client) {
+    if (!this.adm(client)) {
+      return;
+    }
+
     this.state.ended = true;
     this.state.locked = true;
+
     this.lock();
+
     this.state.pending.clear();
+
     this.state.debts.clear();
+
     this.ev(
       "admin",
-      this.me(c).name,
-      `${this.me(c).name} encerrou a sala.`,
-      `settings`,
+      this.me(client).name,
+      `${this.me(client).name} encerrou a sala.`,
+      "settings",
     );
+
     this.broadcast("room_ended", "A sala foi encerrada pelo ADM.");
-    setTimeout(() => this.disconnect(4001), 700);
+
+    setTimeout(() => {
+      this.disconnect(4001);
+    }, 700);
   }
+
   private scheduleSave() {
-    clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.saveNow(), 250);
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+    }
+
+    this.saveTimer = setTimeout(() => {
+      this.saveNow();
+    }, 250);
   }
+
   private saveNow() {
     try {
       atomicSave(this.state, this.pinHash);
-    } catch (e) {
-      console.error("Falha ao salvar", e);
+    } catch (error) {
+      console.error("Falha ao salvar", error);
     }
   }
-  private pauseRoom(c: Client) {
-    if (!this.adm(c)) return;
+
+  private pauseRoom(client: Client) {
+    if (!this.adm(client)) {
+      return;
+    }
+
     this.state.paused = true;
+
     this.ev(
       "admin",
-      this.me(c).name,
-      `${this.me(c).name} pausou e salvou a partida.`,
-      `settings`,
+      this.me(client).name,
+      `${this.me(client).name} pausou e salvou a partida.`,
+      "settings",
     );
+
     this.saveNow();
+
     this.broadcast("room_paused", {
       saveCode: this.state.saveCode,
       message: "Partida pausada e salva.",
