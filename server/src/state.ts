@@ -1,7 +1,211 @@
-import{ArraySchema,MapSchema,Schema,type}from"@colyseus/schema";
-export class Asset extends Schema{@type("string")id="";@type("string")catalogId="";@type("string")kind="";@type("string")name="";@type("number")development=0;@type("boolean")mortgaged=false;@type("number")purchase=0;@type("number")mortgage=0;}
-export class Player extends Schema{@type("string")id="";@type("string")deviceToken="";@type("string")recoveryCode="";@type("string")name="";@type("number")balance=2558000;@type("boolean")connected=true;@type("number")sent=0;@type("number")received=0;@type("number")bankOps=0;@type([Asset])assets=new ArraySchema<Asset>();}
-export class Pending extends Schema{@type("string")id="";@type("string")kind="";@type("string")fromId="";@type("string")fromName="";@type("string")toId="";@type("string")toName="";@type("number")amount=0;@type("string")catalogId="";@type("string")name="";@type("number")development=0;@type("boolean")mortgaged=false;@type("number")purchase=0;@type("number")houseCost=0;@type("number")condominiumCost=0;@type("number")mortgageValue=0;@type("string")reason="";@type("number")at=0;}
-export class Debt extends Schema{@type("string")id="";@type("string")debtorId="";@type("string")debtorName="";@type("string")creditorId="";@type("string")creditorName="";@type("number")originalAmount=0;@type("number")cashOffered=0;@type("string")note="";@type(["string"])assetIds=new ArraySchema<string>();@type("number")at=0;}
-export class Event extends Schema{@type("number")seq=0;@type("string")type="";@type("string")category="";@type("string")actor="";@type("string")message="";@type("number")at=0;}
-export class State extends Schema{@type("string")saveCode="";@type("string")hostId="";@type("string")roomName="Partida Banco Mundo";@type("boolean")locked=false;@type("boolean")ended=false;@type("boolean")paused=false;@type("number")lastSavedAt=0;@type("number")maxPlayers=6;@type("number")seq=0;@type({map:Player})players=new MapSchema<Player>();@type({map:Pending})pending=new MapSchema<Pending>();@type({map:Debt})debts=new MapSchema<Debt>();@type([Event])events=new ArraySchema<Event>();}
+import { ArraySchema, MapSchema, Schema, type } from "@colyseus/schema";
+
+export class Asset extends Schema {
+  @type("string")
+  id = "";
+
+  @type("string")
+  catalogId = "";
+
+  @type("string")
+  kind = "";
+
+  @type("string")
+  name = "";
+
+  @type("number")
+  development = 0;
+
+  @type("boolean")
+  mortgaged = false;
+
+  @type("number")
+  purchase = 0;
+
+  @type("number")
+  mortgage = 0;
+
+  @type("number")
+  houseCost = 0;
+
+  @type("number")
+  condominiumCost = 0;
+}
+
+export class Player extends Schema {
+  @type("string")
+  id = "";
+
+  @type("string")
+  deviceToken = "";
+
+  @type("string")
+  recoveryCode = "";
+
+  @type("string")
+  name = "";
+
+  @type("number")
+  balance = 2558000;
+
+  @type("boolean")
+  connected = true;
+
+  @type("number")
+  sent = 0;
+
+  @type("number")
+  received = 0;
+
+  @type("number")
+  bankOps = 0;
+
+  @type([Asset])
+  assets = new ArraySchema<Asset>();
+}
+
+export class Pending extends Schema {
+  @type("string")
+  id = "";
+
+  @type("string")
+  kind = "";
+
+  @type("string")
+  fromId = "";
+
+  @type("string")
+  fromName = "";
+
+  @type("string")
+  toId = "";
+
+  @type("string")
+  toName = "";
+
+  @type("number")
+  amount = 0;
+
+  @type("string")
+  catalogId = "";
+
+  @type("string")
+  name = "";
+
+  @type("number")
+  development = 0;
+
+  @type("boolean")
+  mortgaged = false;
+
+  @type("number")
+  purchase = 0;
+
+  @type("number")
+  houseCost = 0;
+
+  @type("number")
+  condominiumCost = 0;
+
+  @type("number")
+  mortgageValue = 0;
+
+  @type("string")
+  reason = "";
+
+  @type("number")
+  at = 0;
+}
+
+export class Debt extends Schema {
+  @type("string")
+  id = "";
+
+  @type("string")
+  debtorId = "";
+
+  @type("string")
+  debtorName = "";
+
+  @type("string")
+  creditorId = "";
+
+  @type("string")
+  creditorName = "";
+
+  @type("number")
+  originalAmount = 0;
+
+  @type("number")
+  cashOffered = 0;
+
+  @type("string")
+  note = "";
+
+  @type(["string"])
+  assetIds = new ArraySchema<string>();
+
+  @type("number")
+  at = 0;
+}
+
+export class Event extends Schema {
+  @type("number")
+  seq = 0;
+
+  @type("string")
+  type = "";
+
+  @type("string")
+  category = "";
+
+  @type("string")
+  actor = "";
+
+  @type("string")
+  message = "";
+
+  @type("number")
+  at = 0;
+}
+
+export class State extends Schema {
+  @type("string")
+  saveCode = "";
+
+  @type("string")
+  hostId = "";
+
+  @type("string")
+  roomName = "Partida Banco Mundo";
+
+  @type("boolean")
+  locked = false;
+
+  @type("boolean")
+  ended = false;
+
+  @type("boolean")
+  paused = false;
+
+  @type("number")
+  lastSavedAt = 0;
+
+  @type("number")
+  maxPlayers = 6;
+
+  @type("number")
+  seq = 0;
+
+  @type({ map: Player })
+  players = new MapSchema<Player>();
+
+  @type({ map: Pending })
+  pending = new MapSchema<Pending>();
+
+  @type({ map: Debt })
+  debts = new MapSchema<Debt>();
+
+  @type([Event])
+  events = new ArraySchema<Event>();
+}
