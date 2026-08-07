@@ -1,0 +1,13 @@
+# Checklist 0.4.0
+- [x] Base cumulativa 0.3.3
+- [x] Catálogo 22 propriedades e 6 instituições
+- [x] Compras e construções descontadas
+- [x] ADM, expulsão, offline e bloqueio
+- [x] Saída e reentrada
+- [x] Aprovações e acordos
+- [x] Salvamento automático e periódico
+- [x] Escrita atômica
+- [x] Backups rotativos
+- [x] Pausar e continuar
+- [x] Recuperação de perfil
+- [x] Exportação e importação

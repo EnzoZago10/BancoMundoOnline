@@ -1,0 +1,1 @@
+$ErrorActionPreference="Stop";$root=Split-Path -Parent $PSScriptRoot;Start-Process powershell -ArgumentList '-NoExit','-Command',"cd '$root\server'; npm install; npm run start";Start-Sleep 2;Start-Process powershell -ArgumentList '-NoExit','-Command',"cd '$root\client'; npm install; npm run dev"
