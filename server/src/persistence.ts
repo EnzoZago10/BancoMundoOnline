@@ -1,14 +1,198 @@
-import fs from "node:fs";import path from "node:path";import crypto from "node:crypto";import {Asset,Debt,Event,Pending,Player,State} from "./state.js";
-const root=path.resolve(process.cwd(),"data"), rooms=path.join(root,"rooms"), backups=path.join(root,"backups"), corrupt=path.join(root,"corrupt");
-for(const p of[rooms,backups,corrupt])fs.mkdirSync(p,{recursive:true});
-export const code=()=>crypto.randomBytes(4).toString("hex").toUpperCase();
-export const hash=(v:string)=>crypto.createHash("sha256").update(v).digest("hex");
-const clean=(v:string)=>v.replace(/[^A-Z0-9-]/gi,"");
-const file=(c:string)=>path.join(rooms,clean(c)+".json");
-export function serialize(state:State,pinHash:string){return{format:"BancoMundoSave",version:"0.4.0",savedAt:new Date().toISOString(),pinHash,state:JSON.parse(JSON.stringify(state))};}
-export function atomicSave(state:State,pinHash:string){state.lastSavedAt=Date.now();const out=JSON.stringify(serialize(state,pinHash),null,2),target=file(state.saveCode),tmp=target+".tmp";if(fs.existsSync(target)){const stamp=new Date().toISOString().replace(/[:.]/g,"-");fs.copyFileSync(target,path.join(backups,`${clean(state.saveCode)}-${stamp}.json`));const all=fs.readdirSync(backups).filter(x=>x.startsWith(clean(state.saveCode)+"-")).sort().reverse();for(const old of all.slice(10))fs.rmSync(path.join(backups,old));}fs.writeFileSync(tmp,out,"utf8");fs.renameSync(tmp,target);}
-export function loadSave(c:string){const p=file(c);if(!fs.existsSync(p))throw Error("Partida salva não encontrada.");try{const x=JSON.parse(fs.readFileSync(p,"utf8"));if(x.format!=="BancoMundoSave"||!x.state?.players)throw Error("Formato inválido.");return x;}catch(e){const dst=path.join(corrupt,path.basename(p)+"-"+Date.now());fs.copyFileSync(p,dst);throw Error("O salvamento está corrompido. Uma cópia foi isolada.");}}
-export function restore(raw:any){const s=new State(),x=raw.state;s.saveCode=x.saveCode;s.hostId=x.hostId;s.roomName=x.roomName;s.locked=!!x.locked;s.ended=!!x.ended;s.paused=false;s.maxPlayers=x.maxPlayers||6;s.seq=x.seq||0;s.lastSavedAt=x.lastSavedAt||0;for(const [k,v]of Object.entries<any>(x.players||{})){const p=new Player();Object.assign(p,{id:v.id,deviceToken:v.deviceToken,recoveryCode:v.recoveryCode,name:v.name,balance:v.balance,connected:false,sent:v.sent,received:v.received,bankOps:v.bankOps});for(const z of v.assets||[]){const a=new Asset();Object.assign(a,z);p.assets.push(a)}s.players.set(k,p)}for(const [k,v]of Object.entries<any>(x.pending||{})){const q=new Pending();Object.assign(q,v);s.pending.set(k,q)}for(const [k,v]of Object.entries<any>(x.debts||{})){const d=new Debt();Object.assign(d,{id:v.id,debtorId:v.debtorId,debtorName:v.debtorName,creditorId:v.creditorId,creditorName:v.creditorName,originalAmount:v.originalAmount,cashOffered:v.cashOffered,note:v.note,at:v.at});for(const id of v.assetIds||[])d.assetIds.push(id);s.debts.set(k,d)}for(const v of x.events||[]){const e=new Event();Object.assign(e,v);s.events.push(e)}return s;}
-export function listSaves(){return fs.readdirSync(rooms).filter(x=>x.endsWith(".json")).map(x=>{try{const v=JSON.parse(fs.readFileSync(path.join(rooms,x),"utf8"));return{saveCode:v.state.saveCode,roomName:v.state.roomName,players:Object.keys(v.state.players||{}).length,lastSavedAt:v.state.lastSavedAt,paused:!!v.state.paused,ended:!!v.state.ended}}catch{return null}}).filter(Boolean)}
-export function importSave(raw:any){if(raw?.format!=="BancoMundoSave"||!raw.state?.players)throw Error("Backup inválido.");raw.state.saveCode=code();raw.state.paused=true;fs.writeFileSync(file(raw.state.saveCode),JSON.stringify(raw,null,2),"utf8");return raw.state.saveCode;}
-export function getSavePath(c:string){return file(c)}
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { Asset, Debt, Event, Pending, Player, State } from "./state.js";
+import {
+  loadRoomFromDatabase,
+  saveRoomToDatabase,
+} from "./database.js";
+const root = path.resolve(process.cwd(), "data"),
+  rooms = path.join(root, "rooms"),
+  backups = path.join(root, "backups"),
+  corrupt = path.join(root, "corrupt");
+for (const p of [rooms, backups, corrupt]) fs.mkdirSync(p, { recursive: true });
+export const code = () => crypto.randomBytes(4).toString("hex").toUpperCase();
+export const hash = (v: string) =>
+  crypto.createHash("sha256").update(v).digest("hex");
+const clean = (v: string) => v.replace(/[^A-Z0-9-]/gi, "");
+const file = (c: string) => path.join(rooms, clean(c) + ".json");
+export function serialize(state: State, pinHash: string) {
+  return {
+    format: "BancoMundoSave",
+    version: "0.4.0",
+    savedAt: new Date().toISOString(),
+    pinHash,
+    state: JSON.parse(JSON.stringify(state)),
+  };
+}
+export function atomicSave(state: State, pinHash: string) {
+  state.lastSavedAt = Date.now();
+  const out = JSON.stringify(serialize(state, pinHash), null, 2),
+    target = file(state.saveCode),
+    tmp = target + ".tmp";
+  if (fs.existsSync(target)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.copyFileSync(
+      target,
+      path.join(backups, `${clean(state.saveCode)}-${stamp}.json`),
+    );
+    const all = fs
+      .readdirSync(backups)
+      .filter((x) => x.startsWith(clean(state.saveCode) + "-"))
+      .sort()
+      .reverse();
+    for (const old of all.slice(10)) fs.rmSync(path.join(backups, old));
+  }
+  fs.writeFileSync(tmp, out, "utf8");
+  fs.renameSync(tmp, target);
+
+  const gameStatus = state.ended
+  ? "ended"
+  : state.paused
+    ? "paused"
+    : "active";
+
+void saveRoomToDatabase(
+  state.saveCode,
+  state.roomName,
+  JSON.parse(JSON.stringify(state)),
+  pinHash,
+  gameStatus,
+).catch((error) => {
+  console.error(
+    "Falha ao salvar a partida no PostgreSQL:",
+    error,
+  );
+});
+}
+export function loadSave(c: string) {
+  const p = file(c);
+  if (!fs.existsSync(p)) throw Error("Partida salva não encontrada.");
+  try {
+    const x = JSON.parse(fs.readFileSync(p, "utf8"));
+    if (x.format !== "BancoMundoSave" || !x.state?.players)
+      throw Error("Formato inválido.");
+    return x;
+  } catch (e) {
+    const dst = path.join(corrupt, path.basename(p) + "-" + Date.now());
+    fs.copyFileSync(p, dst);
+    throw Error("O salvamento está corrompido. Uma cópia foi isolada.");
+  }
+}
+
+export async function loadSaveWithFallback(
+  saveCode: string,
+) {
+  try {
+    const databaseSave =
+      await loadRoomFromDatabase(saveCode);
+
+    if (databaseSave) {
+      return databaseSave;
+    }
+  } catch (error) {
+    console.error(
+      "Falha ao carregar a partida do PostgreSQL:",
+      error,
+    );
+  }
+
+  return loadSave(saveCode);
+}
+
+export function restore(raw: any) {
+  const s = new State(),
+    x = raw.state;
+  s.saveCode = x.saveCode;
+  s.hostId = x.hostId;
+  s.roomName = x.roomName;
+  s.locked = !!x.locked;
+  s.ended = !!x.ended;
+  s.paused = false;
+  s.maxPlayers = x.maxPlayers || 6;
+  s.seq = x.seq || 0;
+  s.lastSavedAt = x.lastSavedAt || 0;
+  for (const [k, v] of Object.entries<any>(x.players || {})) {
+    const p = new Player();
+    Object.assign(p, {
+      id: v.id,
+      deviceToken: v.deviceToken,
+      recoveryCode: v.recoveryCode,
+      name: v.name,
+      balance: v.balance,
+      connected: false,
+      sent: v.sent,
+      received: v.received,
+      bankOps: v.bankOps,
+    });
+    for (const z of v.assets || []) {
+      const a = new Asset();
+      Object.assign(a, z);
+      p.assets.push(a);
+    }
+    s.players.set(k, p);
+  }
+  for (const [k, v] of Object.entries<any>(x.pending || {})) {
+    const q = new Pending();
+    Object.assign(q, v);
+    s.pending.set(k, q);
+  }
+  for (const [k, v] of Object.entries<any>(x.debts || {})) {
+    const d = new Debt();
+    Object.assign(d, {
+      id: v.id,
+      debtorId: v.debtorId,
+      debtorName: v.debtorName,
+      creditorId: v.creditorId,
+      creditorName: v.creditorName,
+      originalAmount: v.originalAmount,
+      cashOffered: v.cashOffered,
+      note: v.note,
+      at: v.at,
+    });
+    for (const id of v.assetIds || []) d.assetIds.push(id);
+    s.debts.set(k, d);
+  }
+  for (const v of x.events || []) {
+    const e = new Event();
+    Object.assign(e, v);
+    s.events.push(e);
+  }
+  return s;
+}
+export function listSaves() {
+  return fs
+    .readdirSync(rooms)
+    .filter((x) => x.endsWith(".json"))
+    .map((x) => {
+      try {
+        const v = JSON.parse(fs.readFileSync(path.join(rooms, x), "utf8"));
+        return {
+          saveCode: v.state.saveCode,
+          roomName: v.state.roomName,
+          players: Object.keys(v.state.players || {}).length,
+          lastSavedAt: v.state.lastSavedAt,
+          paused: !!v.state.paused,
+          ended: !!v.state.ended,
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+export function importSave(raw: any) {
+  if (raw?.format !== "BancoMundoSave" || !raw.state?.players)
+    throw Error("Backup inválido.");
+  raw.state.saveCode = code();
+  raw.state.paused = true;
+  fs.writeFileSync(
+    file(raw.state.saveCode),
+    JSON.stringify(raw, null, 2),
+    "utf8",
+  );
+  return raw.state.saveCode;
+}
+export function getSavePath(c: string) {
+  return file(c);
+}

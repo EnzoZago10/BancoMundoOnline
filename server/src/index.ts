@@ -6,10 +6,34 @@ import { Server } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { BankRoom } from "./room.js";
 import { getSavePath, importSave, listSaves } from "./persistence.js";
+import {
+  databaseEnabled,
+  listRoomSavesFromDatabase,
+  testDatabaseConnection,
+} from "./database.js";
+await testDatabaseConnection();
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
-app.get("/api/saves", (_q, r) => r.json(listSaves()));
+app.get("/api/saves", async (_q, r) => {
+  try {
+    if (databaseEnabled) {
+      const databaseSaves =
+        await listRoomSavesFromDatabase();
+
+      return r.json(databaseSaves || []);
+    }
+
+    return r.json(listSaves());
+  } catch (error) {
+    console.error(
+      "Falha ao listar partidas no PostgreSQL:",
+      error,
+    );
+
+    return r.json(listSaves());
+  }
+});
 app.get("/api/saves/:code", (q, r) => {
   try {
     r.download(getSavePath(q.params.code), `BancoMundo-${q.params.code}.json`);
