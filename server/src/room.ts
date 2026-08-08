@@ -1267,7 +1267,7 @@ export class BankRoom extends Room<{
       "report",
       JSON.stringify(
         {
-          version: "0.4.3.2",
+          version: "0.4.3.3",
           roomId: this.roomId,
           state: this.state,
         },

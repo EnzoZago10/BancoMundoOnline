@@ -59,4 +59,4 @@ const port = Number(process.env.PORT || 2567);
 
 await g.listen(port);
 
-console.log(`Banco Mundo Online 0.4.3.2 executando na porta ${port}`);
+console.log(`Banco Mundo Online 0.4.3.3 executando na porta ${port}`);
