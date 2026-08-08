@@ -11,7 +11,8 @@ let room,
   me,
   pin = "",
   intentional = false,
-  recoveryCode = "";
+  recoveryCode = "",
+  recoveryHideTimer;
 const recentKey = "bm-recent-033",
   sessionKey = "bm-session-033",
   fmt = (n) => Number(n).toLocaleString("pt-BR"),
@@ -52,8 +53,9 @@ async function connect(create, override) {
         deviceToken:
           localStorage.deviceToken ||
           (localStorage.deviceToken = crypto.randomUUID()),
-        recoveryCode,
+        recoveryCode: $("#recoveryInput").value.trim() || recoveryCode,
       };
+    recoveryCode = data.recoveryCode || recoveryCode;
     if (override?.resumeCode) {
       room = await client.joinOrCreate("bank_room", data);
     } else if (create) {
@@ -116,7 +118,8 @@ function bind() {
     s.recoveryCode = recoveryCode;
     s.saveCode = room.state.saveCode;
     localStorage.setItem(sessionKey, JSON.stringify(s));
-    toast(`Perfil protegido. Código pessoal: ${recoveryCode}`);
+    updateRecoveryCard();
+    toast("Perfil protegido. Consulte o código em Meu perfil e recuperação.");
   });
   room.onMessage("room_paused", (d) => {
     toast(d.message);
@@ -137,7 +140,75 @@ function bind() {
   });
   render();
 }
+function getStoredRecoveryCode() {
+  if (recoveryCode) return recoveryCode;
+  try {
+    return JSON.parse(localStorage.getItem(sessionKey) || "{}").recoveryCode || "";
+  } catch {
+    return "";
+  }
+}
+function updateRecoveryCard(show = false) {
+  const code = getStoredRecoveryCode();
+  let storedName = "";
+  try {
+    storedName = JSON.parse(localStorage.getItem(sessionKey) || "{}").name || "";
+  } catch {}
+  const name = room?.state?.players?.get(me)?.name || storedName;
+  const nameBox = $("#myProfileName");
+  const codeBox = $("#myRecoveryCode");
+  const toggle = $("#toggleRecovery");
+  if (!nameBox || !codeBox || !toggle) return;
+  nameBox.textContent = name ? `Jogador: ${name}` : "";
+  codeBox.textContent = show && code ? code : code ? "••••••••" : "Código ainda não disponível";
+  codeBox.dataset.visible = show && code ? "true" : "false";
+  toggle.textContent = show && code ? "🙈 Ocultar código" : "👁 Mostrar código";
+  clearTimeout(recoveryHideTimer);
+  if (show && code) recoveryHideTimer = setTimeout(() => updateRecoveryCard(false), 20000);
+}
+async function writeText(text) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand("copy");
+  area.remove();
+}
+async function copyRecoveryCode() {
+  const code = getStoredRecoveryCode();
+  if (!code) return toast("Código pessoal ainda não disponível.");
+  try {
+    await writeText(code);
+    toast("Código pessoal copiado.");
+  } catch {
+    toast("Não foi possível copiar. Use Mostrar código.");
+  }
+}
+async function shareRecoveryCode() {
+  const code = getStoredRecoveryCode();
+  if (!code) return toast("Código pessoal ainda não disponível.");
+  const name = room?.state?.players?.get(me)?.name || "Jogador";
+  const text = `Banco Mundo Online\nJogador: ${name}\nCódigo pessoal de recuperação: ${code}\n\nGuarde em local privado.`;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: "Meu código de recuperação", text });
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+    }
+  }
+  try {
+    await writeText(text);
+    toast("Dados de recuperação copiados.");
+  } catch {
+    toast("Não foi possível compartilhar ou copiar.");
+  }
+}
 function render() {
+  updateRecoveryCard();
   const ps = [...room.state.players.entries()],
     adm = room.state.hostId === me,
     opts = ps
@@ -473,6 +544,12 @@ document.querySelectorAll(".tab").forEach(
 );
 init();
 
+$("#toggleRecovery").onclick = () => {
+  const visible = $("#myRecoveryCode").dataset.visible === "true";
+  updateRecoveryCard(!visible);
+};
+$("#copyRecovery").onclick = copyRecoveryCode;
+$("#shareRecovery").onclick = shareRecoveryCode;
 $("#transferAdmin").onclick = () => {
   const playerId = $("#transferAdminPlayer").value;
   if (!playerId) return toast("Selecione um jogador online.");
