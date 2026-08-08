@@ -54,11 +54,23 @@ async function connect(create, override) {
           (localStorage.deviceToken = crypto.randomUUID()),
         recoveryCode,
       };
-    if (override?.resumeCode) room = await client.create("bank_room", data);
-    else
-      room = create
-        ? await client.create("bank_room", data)
-        : await client.joinById(override?.roomId || $("#code").value, data);
+    if (override?.resumeCode) {
+      room = await client.joinOrCreate("bank_room", data);
+    } else if (create) {
+      room = await client.create("bank_room", data);
+    } else {
+      const enteredCode = (override?.roomId || $("#code").value).trim();
+      if (!enteredCode) throw Error("Informe o código da sala ou da partida salva.");
+      try {
+        room = await client.joinById(enteredCode, data);
+      } catch (activeRoomError) {
+        try {
+          room = await client.joinOrCreate("bank_room", { ...data, resumeCode: enteredCode });
+        } catch (savedRoomError) {
+          throw Error(savedRoomError?.message || activeRoomError?.message || "Sala ou partida salva não encontrada.");
+        }
+      }
+    }
     me = room.sessionId;
     intentional = false;
     localStorage.removeItem(recentKey);
@@ -73,7 +85,6 @@ async function connect(create, override) {
       }),
     );
     $("#lobby").classList.add("hidden");
-    $("#savedCard").classList.add("hidden");
     $("#returnCard").classList.add("hidden");
     $("#game").classList.remove("hidden");
     bind();
@@ -109,7 +120,6 @@ function bind() {
   });
   room.onMessage("room_paused", (d) => {
     toast(d.message);
-    loadSaves();
   });
   room.onMessage("kicked", (m) => {
     localStorage.removeItem(sessionKey);
@@ -149,9 +159,15 @@ function render() {
   $("#players").innerHTML = ps
     .map(
       ([id, p]) =>
-        `<div class="player"><strong>${p.name}${id === me ? " (você)" : ""}${id === room.state.hostId ? " 👑 ADM" : ""}</strong> • ${fmt(p.balance)}<div class="small">${p.connected ? "🟢 Online" : "⚪ Offline"} • Enviado ${fmt(p.sent)} • Recebido ${fmt(p.received)}</div>${adm && id !== me ? (p.connected ? `<button class="danger" data-kick="${id}">Expulsar</button>` : `<button class="danger" data-remove="${id}">Remover offline</button>`) : ""}</div>`,
+        `<div class="player"><strong>${p.name}${id === me ? " (você)" : ""}${id === room.state.hostId ? ` 👑 ADM • ${p.connected ? "Online" : "Offline"}` : ""}</strong> • ${fmt(p.balance)}<div class="small">${p.connected ? "🟢 Online" : "⚪ Offline"} • Enviado ${fmt(p.sent)} • Recebido ${fmt(p.received)}</div>${adm && id !== me ? (p.connected ? `<button class="danger" data-kick="${id}">Expulsar</button>` : `<button class="danger" data-remove="${id}">Remover offline</button>`) : ""}</div>`,
     )
     .join("");
+  const transferSelect = $("#transferAdminPlayer");
+  if (transferSelect) {
+    const currentValue = transferSelect.value;
+    transferSelect.innerHTML = `<option value="">Selecione um jogador online</option>${ps.filter(([id, player]) => id !== me && player.connected).map(([id, player]) => `<option value="${id}">${player.name}</option>`).join("")}`;
+    if ([...transferSelect.options].some((option) => option.value === currentValue)) transferSelect.value = currentValue;
+  }
   document
     .querySelectorAll("[data-kick]")
     .forEach(
@@ -455,66 +471,13 @@ document.querySelectorAll(".tab").forEach(
       $("#" + b.dataset.tab).classList.add("active");
     }),
 );
-loadSaves();
 init();
 
-async function loadSaves() {
-  try {
-    const list = await fetch(`${apiBase}/api/saves`).then((r) => r.json());
-    $("#savedGames").innerHTML = list.length
-      ? list
-          .map(
-            (x) =>
-              `<div class="player"><strong>${x.roomName}</strong><div>Código permanente: ${x.saveCode}</div><div class="small">${x.players} perfis • Salvo em ${x.lastSavedAt ? new Date(x.lastSavedAt).toLocaleString("pt-BR") : "sem data"}</div><div class="row"><button data-resume="${x.saveCode}">Continuar partida</button><button data-download="${x.saveCode}">Baixar backup</button></div></div>`,
-          )
-          .join("")
-      : "Nenhuma partida salva.";
-    document.querySelectorAll("[data-resume]").forEach(
-      (b) =>
-        (b.onclick = () => {
-          const s = JSON.parse(
-            localStorage.getItem(sessionKey) ||
-              localStorage.getItem(recentKey) ||
-              "{}",
-          );
-          const name =
-            prompt("Nome do perfil", s.name || "") || s.name || "Jogador";
-          const pinValue = prompt("PIN da partida", s.pin || "") ?? "";
-          const rec =
-            prompt(
-              "Código pessoal de recuperação (se estiver em outro navegador)",
-              s.recoveryCode || "",
-            ) ||
-            s.recoveryCode ||
-            "";
-          pin = pinValue;
-          connect(false, {
-            resumeCode: b.dataset.resume,
-            name,
-            pin: pinValue,
-            deviceToken:
-              localStorage.deviceToken ||
-              (localStorage.deviceToken = crypto.randomUUID()),
-            recoveryCode: rec,
-            initialBalance: 2558000,
-          });
-        }),
-    );
-    document
-      .querySelectorAll("[data-download]")
-      .forEach(
-        (b) =>
-          (b.onclick = () =>
-            window.open(
-              `${apiBase}/api/saves/${b.dataset.download}`,
-              "_blank",
-            )),
-      );
-  } catch {
-    $("#savedGames").textContent =
-      "Servidor indisponível ou nenhum salvamento carregado.";
-  }
-}
+$("#transferAdmin").onclick = () => {
+  const playerId = $("#transferAdminPlayer").value;
+  if (!playerId) return toast("Selecione um jogador online.");
+  room.send("transfer_admin", { playerId });
+};
 $("#importBackup").onclick = async () => {
   const f = $("#importFile").files?.[0];
   if (!f) return toast("Selecione um backup JSON.");
@@ -527,8 +490,11 @@ $("#importBackup").onclick = async () => {
     });
     const x = await r.json();
     if (!r.ok) throw Error(x.error);
+    $("#code").value = x.saveCode;
+    const result = $("#importResult");
+    result.classList.remove("hidden");
+    result.innerHTML = `<strong>Backup importado com sucesso.</strong><div>Código da nova partida: <b>${x.saveCode}</b></div><div class="small">Informe o nome e o PIN original, depois selecione Entrar.</div>`;
     toast(`Backup importado com código ${x.saveCode}`);
-    loadSaves();
   } catch (e) {
     toast(e.message);
   }

@@ -41,9 +41,9 @@ app.get("/api/saves/:code", (q, r) => {
     r.status(404).json({ error: String(e) });
   }
 });
-app.post("/api/import", (q, r) => {
+app.post("/api/import", async (q, r) => {
   try {
-    r.json({ saveCode: importSave(q.body) });
+    r.json({ saveCode: await importSave(q.body) });
   } catch (e) {
     r.status(400).json({ error: String(e) });
   }
@@ -53,10 +53,10 @@ const s = http.createServer(app),
     transport: new WebSocketTransport({ server: s }),
   });
 
-g.define("bank_room", BankRoom);
+g.define("bank_room", BankRoom).filterBy(["resumeCode"]);
 
 const port = Number(process.env.PORT || 2567);
 
 await g.listen(port);
 
-console.log(`Banco Mundo Online 0.4.2 executando na porta ${port}`);
+console.log(`Banco Mundo Online 0.4.3.2 executando na porta ${port}`);

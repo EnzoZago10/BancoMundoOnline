@@ -32,7 +32,7 @@ const file = (saveCode: string) => path.join(rooms, `${clean(saveCode)}.json`);
 export function serialize(state: State, pinHash: string) {
   return {
     format: "BancoMundoSave",
-    version: "0.4.2",
+    version: "0.4.3.2",
     savedAt: new Date().toISOString(),
     pinHash,
     state: JSON.parse(JSON.stringify(state)),
@@ -318,21 +318,17 @@ export function listSaves() {
     .filter((save): save is NonNullable<typeof save> => Boolean(save));
 }
 
-export function importSave(raw: any) {
-  if (raw?.format !== "BancoMundoSave" || !raw.state?.players) {
-    throw Error("Backup inválido.");
-  }
-
-  raw.version = "0.4.2";
-
+export async function importSave(raw: any) {
+  if (raw?.format !== "BancoMundoSave" || !raw.state?.players) throw Error("Backup inválido.");
+  raw.version = "0.4.3.2";
   raw.state.saveCode = code();
-
   raw.state.paused = true;
-
+  raw.state.ended = false;
+  raw.state.locked = false;
+  raw.state.lastSavedAt = Date.now();
   const target = file(raw.state.saveCode);
-
   fs.writeFileSync(target, JSON.stringify(raw, null, 2), "utf8");
-
+  await saveRoomToDatabase(raw.state.saveCode, raw.state.roomName || "Partida Banco Mundo", raw.state, raw.pinHash || "", "paused");
   return raw.state.saveCode;
 }
 
