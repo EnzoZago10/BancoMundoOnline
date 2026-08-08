@@ -107,7 +107,7 @@ export async function saveRoomToDatabase(
         stateData,
         pinHash,
         gameStatus,
-        "0.4.2",
+        "0.4.3.2",
       ],
     );
 

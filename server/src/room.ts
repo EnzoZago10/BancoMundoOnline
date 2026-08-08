@@ -71,6 +71,7 @@ export class BankRoom extends Room<{
       kick: this.kick,
       remove_offline: this.removeOffline,
       toggle_lock: this.toggleLock,
+      transfer_admin: this.transferAdmin,
       settings: this.settings,
       report: this.report,
       end_room: this.endRoom,
@@ -276,10 +277,6 @@ export class BankRoom extends Room<{
       "info",
     );
 
-    if (this.state.hostId === player.id) {
-      this.assignAdmin(player.name);
-    }
-
     this.saveNow();
   }
 
@@ -319,27 +316,6 @@ export class BankRoom extends Room<{
     while (this.state.events.length > 250) {
       this.state.events.shift();
     }
-  }
-
-  private assignAdmin(previousAdminName: string) {
-    const nextAdmin =
-      [...this.state.players.values()].find((player) => player.connected) ??
-      [...this.state.players.values()][0];
-
-    if (!nextAdmin) {
-      this.state.hostId = "";
-
-      return;
-    }
-
-    this.state.hostId = nextAdmin.id;
-
-    this.ev(
-      "admin",
-      nextAdmin.name,
-      `${previousAdminName} saiu; ${nextAdmin.name} agora é o ADM.`,
-      "settings",
-    );
   }
 
   private clearPlayer(playerId: string) {
@@ -1233,6 +1209,19 @@ export class BankRoom extends Room<{
     );
   }
 
+  private transferAdmin(client: Client, data: any) {
+    if (!this.adm(client)) return;
+    const currentAdmin = this.me(client);
+    const playerId = t(data.playerId, 50);
+    const nextAdmin = this.state.players.get(playerId);
+    if (!nextAdmin || nextAdmin.id === currentAdmin.id) return client.send("error", "Selecione outro jogador válido.");
+    if (!nextAdmin.connected) return client.send("error", "O novo ADM precisa estar online.");
+    this.state.hostId = nextAdmin.id;
+    this.ev("admin", currentAdmin.name, `${currentAdmin.name} transferiu a administração para ${nextAdmin.name}.`, "settings");
+    this.saveNow();
+    this.broadcast("admin_transferred", { from: currentAdmin.name, to: nextAdmin.name });
+  }
+
   private toggleLock(client: Client) {
     if (!this.adm(client)) {
       return;
@@ -1278,7 +1267,7 @@ export class BankRoom extends Room<{
       "report",
       JSON.stringify(
         {
-          version: "0.4.2",
+          version: "0.4.3.2",
           roomId: this.roomId,
           state: this.state,
         },
