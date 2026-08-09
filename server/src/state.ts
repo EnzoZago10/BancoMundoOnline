@@ -60,6 +60,12 @@ export class Player extends Schema {
   @type("number")
   bankOps = 0;
 
+  @type("boolean")
+  bankrupt = false;
+
+  @type("string")
+  bankruptcyBackup = "";
+
   @type([Asset])
   assets = new ArraySchema<Asset>();
 }

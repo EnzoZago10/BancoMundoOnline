@@ -230,7 +230,7 @@ function render() {
   $("#players").innerHTML = ps
     .map(
       ([id, p]) =>
-        `<div class="player"><strong>${p.name}${id === me ? " (você)" : ""}${id === room.state.hostId ? ` 👑 ADM • ${p.connected ? "Online" : "Offline"}` : ""}</strong> • ${fmt(p.balance)}<div class="small">${p.connected ? "🟢 Online" : "⚪ Offline"} • Enviado ${fmt(p.sent)} • Recebido ${fmt(p.received)}</div>${adm && id !== me ? (p.connected ? `<button class="danger" data-kick="${id}">Expulsar</button>` : `<button class="danger" data-remove="${id}">Remover offline</button>`) : ""}</div>`,
+        `<div class="player ${p.bankrupt ? "bankrupt" : ""}"><strong>${p.name}${id === me ? " (você)" : ""}${id === room.state.hostId ? ` 👑 ADM • ${p.connected ? "Online" : "Offline"}` : ""}${p.bankrupt ? " • 🔒 FALIDO" : ""}</strong> • ${fmt(p.balance)}<div class="small">${p.connected ? "🟢 Online" : "⚪ Offline"} • Enviado ${fmt(p.sent)} • Recebido ${fmt(p.received)}</div>${adm && id !== me ? (p.connected ? `<button class="danger" data-kick="${id}">Expulsar</button>` : `<button class="danger" data-remove="${id}">Remover offline</button>`) : ""}${adm && id !== me ? (p.bankrupt ? `<button data-restore-bankrupt="${id}">Desfazer falência</button>` : `<button class="danger" data-declare-bankrupt="${id}">Declarar falência</button>`) : ""}</div>`,
     )
     .join("");
   const transferSelect = $("#transferAdminPlayer");
@@ -268,7 +268,7 @@ function assets(p, opts) {
     ? [...p.assets]
         .map(
           (a) =>
-            `<div class="asset"><strong>${a.name}</strong><div>${a.kind === "property" ? (a.development === 5 ? "Condomínio" : a.development + " casas") : "Instituição"}${a.mortgaged ? " • HIPOTECADO" : ""}</div><div class="row">${a.kind === "property" ? `<button data-dev="${a.id}" data-v="${Math.max(0, a.development - 1)}">−</button><button data-dev="${a.id}" data-v="${Math.min(5, a.development + 1)}">+</button>` : ""}<button data-mort="${a.id}">Hipoteca</button><select data-offer="${a.id}"><option value="">Oferecer...</option>${opts}</select></div></div>`,
+            `<div class="asset ${a.mortgaged ? "mortgaged" : ""}"><strong>${a.name}</strong><div>${a.kind === "property" ? (a.development === 5 ? "Condomínio" : a.development + " casas") : "Instituição"}${a.mortgaged ? ` • HIPOTECADA • Valor ${fmt(a.mortgage)}` : ""}</div>${a.mortgaged ? `<div class="small">Construções, ofertas e acordos ficam bloqueados até retirar a hipoteca.</div>` : ""}<div class="row">${a.kind === "property" ? `<button data-dev="${a.id}" data-v="${Math.max(0, a.development - 1)}">−</button><button data-dev="${a.id}" data-v="${Math.min(5, a.development + 1)}">+</button>` : ""}<button data-mort="${a.id}">Hipoteca</button><select data-offer="${a.id}"><option value="">Oferecer...</option>${opts}</select></div></div>`,
         )
         .join("")
     : '<div class="empty">Nenhum patrimônio.</div>';
@@ -542,7 +542,39 @@ document.querySelectorAll(".tab").forEach(
       $("#" + b.dataset.tab).classList.add("active");
     }),
 );
+const manualTopics = [
+  ["Criar e entrar", "Crie uma sala com nome, saldo e PIN. Para entrar, use o código temporário ou permanente e o mesmo PIN."],
+  ["Códigos", "O código temporário identifica a sala ativa. O permanente restaura a partida. O código pessoal recupera somente o seu perfil em outro aparelho."],
+  ["ADM", "O ADM aprova banco, patrimônio e falência. O ADM permanece responsável quando offline e pode transferir a administração para outro jogador online."],
+  ["Dinheiro e banco", "Pagamentos exigem saldo e aprovação do destinatário. Operações com o banco exigem aprovação do ADM."],
+  ["Propriedades e instituições", "Cada item possui um único proprietário. Solicitações duplicadas são bloqueadas."],
+  ["Casas e condomínio", "Compre um nível por vez pelo valor oficial. Ao vender, receba 50% do valor oficial. Propriedade hipotecada não aceita construções."],
+  ["Aluguel e FMI", "Use as calculadoras da aba Regras. O valor do FMI é a soma dos dados multiplicada por 2.000, conforme restituição ou dívida."],
+  ["Hipoteca", "Venda todas as construções antes de hipotecar. Um patrimônio hipotecado não pode receber construções, ser oferecido ou integrar acordo de dívida."],
+  ["Dívidas", "O devedor pode oferecer dinheiro e patrimônios elegíveis. O credor aceita ou recusa. Itens hipotecados ou com construções não são elegíveis."],
+  ["Falência", "Solicite falência para aprovação do ADM. Construções são liquidadas por 50%, pendências são canceladas e patrimônios retornam ao banco. O perfil falido vira espectador. O ADM pode desfazer usando o retrato anterior."],
+  ["Salvar e backup", "Pausar e salvar grava o estado. Baixe o backup JSON e guarde em local privado. Ao importar, um novo código permanente é gerado."],
+  ["Segurança", "Não compartilhe PIN e código pessoal publicamente. Cada jogador deve guardar o próprio código pessoal."],
+  ["Solução de problemas", "Use navegador normal ou APK para preservar o perfil. Em aparelho novo, informe o código pessoal. Se a versão parecer antiga, recarregue o site."],
+];
+function renderManual() {
+  const term = ($("#manualSearch")?.value || "").toLocaleLowerCase("pt-BR");
+  const topics = manualTopics.filter(([title, text]) => `${title} ${text}`.toLocaleLowerCase("pt-BR").includes(term));
+  $("#manualContent").innerHTML = topics.map(([title, text]) => `<article class="manual-topic"><h3>${title}</h3><p>${text}</p></article>`).join("") || `<div class="empty">Nenhum assunto encontrado.</div>`;
+}
 init();
+renderManual();
+
+$("#manualSearch").oninput = renderManual;
+$("#requestBankruptcy").onclick = () => confirm("Solicitar falência ao ADM? As operações serão bloqueadas após aprovação.") && room.send("request_bankruptcy");
+document.addEventListener("click", (event) => {
+  const declareButton = event.target.closest("[data-declare-bankrupt]");
+  if (declareButton && confirm("Declarar falência? Construções serão liquidadas por 50%, patrimônios voltarão ao banco e o perfil ficará bloqueado.")) {
+    if (confirm("Confirma definitivamente a falência deste jogador?")) room.send("declare_bankruptcy", { playerId: declareButton.dataset.declareBankrupt });
+  }
+  const restoreButton = event.target.closest("[data-restore-bankrupt]");
+  if (restoreButton && confirm("Restaurar o retrato anterior à falência?")) room.send("restore_bankruptcy", { playerId: restoreButton.dataset.restoreBankrupt });
+});
 
 $("#toggleRecovery").onclick = () => {
   const visible = $("#myRecoveryCode").dataset.visible === "true";

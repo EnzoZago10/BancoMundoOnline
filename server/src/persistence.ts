@@ -32,7 +32,7 @@ const file = (saveCode: string) => path.join(rooms, `${clean(saveCode)}.json`);
 export function serialize(state: State, pinHash: string) {
   return {
     format: "BancoMundoSave",
-    version: "0.4.3.3",
+    version: "0.5.0",
     savedAt: new Date().toISOString(),
     pinHash,
     state: JSON.parse(JSON.stringify(state)),
@@ -175,6 +175,8 @@ export function restore(raw: any) {
       received: Number(playerData.received) || 0,
 
       bankOps: Number(playerData.bankOps) || 0,
+      bankrupt: Boolean(playerData.bankrupt),
+      bankruptcyBackup: String(playerData.bankruptcyBackup || ""),
     });
 
     for (const assetData of playerData.assets || []) {
@@ -320,7 +322,7 @@ export function listSaves() {
 
 export async function importSave(raw: any) {
   if (raw?.format !== "BancoMundoSave" || !raw.state?.players) throw Error("Backup inválido.");
-  raw.version = "0.4.3.3";
+  raw.version = "0.5.0";
   raw.state.saveCode = code();
   raw.state.paused = true;
   raw.state.ended = false;
