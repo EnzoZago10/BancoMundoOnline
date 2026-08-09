@@ -72,6 +72,9 @@ export class BankRoom extends Room<{
       remove_offline: this.removeOffline,
       toggle_lock: this.toggleLock,
       transfer_admin: this.transferAdmin,
+      request_bankruptcy: this.requestBankruptcy,
+      declare_bankruptcy: this.declareBankruptcy,
+      restore_bankruptcy: this.restoreBankruptcy,
       settings: this.settings,
       report: this.report,
       end_room: this.endRoom,
@@ -290,6 +293,15 @@ export class BankRoom extends Room<{
     return player;
   }
 
+  private activePlayer(client: Client) {
+    const player = this.me(client);
+    if (player.bankrupt) {
+      client.send("error", "Perfil falido: operações financeiras e patrimoniais estão bloqueadas.");
+      return undefined;
+    }
+    return player;
+  }
+
   private adm(client: Client) {
     if (client.sessionId !== this.state.hostId) {
       client.send("error", "Somente o ADM pode realizar esta ação.");
@@ -414,13 +426,15 @@ export class BankRoom extends Room<{
   }
 
   private money(client: Client, data: any) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     const destination = this.state.players.get(t(data.to, 50));
 
     const amount = Number(data.amount) || 0;
 
-    if (!destination || amount <= 0 || player.balance < amount) {
+    if (!destination || destination.bankrupt || amount <= 0 || player.balance < amount) {
       return client.send("error", "Pagamento inválido.");
     }
 
@@ -435,7 +449,9 @@ export class BankRoom extends Room<{
   }
 
   private bank(client: Client, data: any) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     const amount = Number(data.amount) || 0;
 
@@ -454,7 +470,9 @@ export class BankRoom extends Room<{
   }
 
   private asset(client: Client, data: any) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     const catalogId = t(data.catalogId, 50);
 
@@ -552,7 +570,12 @@ export class BankRoom extends Room<{
       return;
     }
 
+    if (request.kind === "bankruptcy") {
+      return this.applyBankruptcy(client, player);
+    }
+
     if (request.kind === "money") {
+      if (responder.bankrupt) return client.send("error", "Perfil falido não pode receber pagamentos.");
       if (request.amount <= 0 || player.balance < request.amount) {
         client.send("error", "Saldo insuficiente ou pagamento inválido.");
 
@@ -752,7 +775,9 @@ export class BankRoom extends Room<{
   }
 
   private development(client: Client, data: any) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     const assetId = t(data.id, 80);
 
@@ -882,7 +907,9 @@ export class BankRoom extends Room<{
   }
 
   private mortgage(client: Client, data: any) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     const asset = player.assets.find((item) => item.id === data.id);
 
@@ -910,13 +937,15 @@ export class BankRoom extends Room<{
   }
 
   private offer(client: Client, data: any) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     const destination = this.state.players.get(t(data.to, 50));
 
     const asset = player.assets.find((item) => item.id === data.assetId);
 
-    if (!destination || !asset || asset.mortgaged || asset.development > 0) {
+    if (!destination || destination.bankrupt || !asset || asset.mortgaged || asset.development > 0) {
       return client.send(
         "error",
         "Somente item sem construção e não hipotecado.",
@@ -939,7 +968,9 @@ export class BankRoom extends Room<{
   }
 
   private debt(client: Client, data: any) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     const creditor = this.state.players.get(t(data.creditorId, 50));
 
@@ -949,7 +980,7 @@ export class BankRoom extends Room<{
       ? data.assetIds.map((id: unknown) => t(id, 50))
       : [];
 
-    if (!creditor || creditor.id === player.id || cash > player.balance) {
+    if (!creditor || creditor.bankrupt || creditor.id === player.id || cash > player.balance) {
       return client.send("error", "Acordo inválido.");
     }
 
@@ -1005,7 +1036,8 @@ export class BankRoom extends Room<{
   }
 
   private respondDebt(client: Client, data: any) {
-    const creditor = this.me(client);
+    const creditor = this.activePlayer(client);
+    if (!creditor) return;
 
     const agreementId = t(data.id, 50);
 
@@ -1134,7 +1166,9 @@ export class BankRoom extends Room<{
   }
 
   private startBonus(client: Client) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     this.pend("bank", player, this.state.players.get(this.state.hostId), {
       amount: 200000,
@@ -1143,7 +1177,9 @@ export class BankRoom extends Room<{
   }
 
   private fmi(client: Client, data: any) {
-    const player = this.me(client);
+    const player = this.activePlayer(client);
+
+    if (!player) return;
 
     const diceSum = Math.max(2, Math.min(12, Number(data.sum) || 2));
 
@@ -1209,6 +1245,92 @@ export class BankRoom extends Room<{
     );
   }
 
+  private requestBankruptcy(client: Client) {
+    const player = this.activePlayer(client);
+    if (!player) return;
+    for (const request of this.state.pending.values()) {
+      if (request.kind === "bankruptcy" && request.fromId === player.id) {
+        return client.send("error", "Já existe uma solicitação de falência pendente.");
+      }
+    }
+    this.pend("bankruptcy", player, this.state.players.get(this.state.hostId), {
+      reason: "Solicitação de falência",
+    });
+    this.ev("bankruptcy", player.name, `${player.name} solicitou declaração de falência.`, "pending");
+  }
+
+  private declareBankruptcy(client: Client, data: any) {
+    if (!this.adm(client)) return;
+    const player = this.state.players.get(t(data.playerId, 50));
+    if (!player || player.bankrupt) return client.send("error", "Jogador inválido ou já falido.");
+    this.applyBankruptcy(client, player);
+  }
+
+  private applyBankruptcy(client: Client, player: Player) {
+    if (player.bankrupt) return client.send("error", "O jogador já está falido.");
+    const snapshot = {
+      balance: player.balance,
+      bankOps: player.bankOps,
+      sent: player.sent,
+      received: player.received,
+      assets: [...player.assets].map((asset) => ({
+        id: asset.id, catalogId: asset.catalogId, kind: asset.kind, name: asset.name,
+        development: asset.development, mortgaged: asset.mortgaged,
+        purchase: asset.purchase, mortgage: asset.mortgage,
+        houseCost: asset.houseCost, condominiumCost: asset.condominiumCost,
+      })),
+    };
+    player.bankruptcyBackup = JSON.stringify(snapshot);
+    let refund = 0;
+    for (const asset of player.assets) {
+      if (asset.kind === "property") {
+        if (asset.development === 5) refund += Math.floor(asset.condominiumCost * 0.5) + Math.floor(asset.houseCost * 0.5) * 4;
+        else refund += Math.floor(asset.houseCost * 0.5) * asset.development;
+      }
+    }
+    player.balance += refund;
+    player.assets.clear();
+    player.bankrupt = true;
+    for (const [id, request] of this.state.pending) {
+      if (request.fromId === player.id || request.toId === player.id) this.state.pending.delete(id);
+    }
+    for (const [id, agreement] of this.state.debts) {
+      if (agreement.debtorId === player.id || agreement.creditorId === player.id) this.state.debts.delete(id);
+    }
+    this.ev("bankruptcy", this.me(client).name, `${player.name} foi declarado falido. Construções liquidadas por 50% (${refund.toLocaleString("pt-BR")}) e patrimônios devolvidos ao banco.`, "bankrupt");
+    this.saveNow();
+  }
+
+  private restoreBankruptcy(client: Client, data: any) {
+    if (!this.adm(client)) return;
+    const player = this.state.players.get(t(data.playerId, 50));
+    if (!player?.bankrupt || !player.bankruptcyBackup) return client.send("error", "Não há falência reversível para este jogador.");
+    try {
+      const snapshot = JSON.parse(player.bankruptcyBackup);
+      const conflicts = (snapshot.assets || []).filter((raw: any) => {
+        const owner = this.findCatalogOwner(String(raw.catalogId || ""));
+        return owner && owner.id !== player.id;
+      });
+      if (conflicts.length) return client.send("error", "Não é possível desfazer: um patrimônio já possui novo proprietário.");
+      player.balance = Number(snapshot.balance) || 0;
+      player.bankOps = Number(snapshot.bankOps) || 0;
+      player.sent = Number(snapshot.sent) || 0;
+      player.received = Number(snapshot.received) || 0;
+      player.assets.clear();
+      for (const raw of snapshot.assets || []) {
+        const asset = new Asset();
+        Object.assign(asset, raw);
+        player.assets.push(asset);
+      }
+      player.bankrupt = false;
+      player.bankruptcyBackup = "";
+      this.ev("bankruptcy", this.me(client).name, `${this.me(client).name} desfez a falência de ${player.name} e restaurou o retrato anterior.`, "restored");
+      this.saveNow();
+    } catch {
+      client.send("error", "Não foi possível restaurar o retrato anterior à falência.");
+    }
+  }
+
   private transferAdmin(client: Client, data: any) {
     if (!this.adm(client)) return;
     const currentAdmin = this.me(client);
@@ -1267,7 +1389,7 @@ export class BankRoom extends Room<{
       "report",
       JSON.stringify(
         {
-          version: "0.4.3.3",
+          version: "0.5.0",
           roomId: this.roomId,
           state: this.state,
         },
