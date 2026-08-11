@@ -1,4 +1,4 @@
-const CACHE_VERSION = "banco-mundo-pwa-0.5.2";
+const CACHE_VERSION = "banco-mundo-pwa-0.5.3";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const CORE_FILES = [
   "/offline.html",

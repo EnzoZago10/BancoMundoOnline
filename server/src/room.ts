@@ -17,6 +17,24 @@ const t = (value: unknown, maxLength = 120) =>
 
 const uid = () => crypto.randomUUID();
 
+const recentCreateOperations = new Map<string, number>();
+const CREATE_OPERATION_WINDOW_MS = 2 * 60 * 1000;
+
+function reserveCreateOperation(operationId: unknown) {
+  const id = t(operationId, 80);
+  if (!id) return;
+  const now = Date.now();
+  for (const [key, createdAt] of recentCreateOperations) {
+    if (now - createdAt > CREATE_OPERATION_WINDOW_MS) {
+      recentCreateOperations.delete(key);
+    }
+  }
+  if (recentCreateOperations.has(id)) {
+    throw Error("Esta tentativa de criação já foi processada.");
+  }
+  recentCreateOperations.set(id, now);
+}
+
 export class BankRoom extends Room<{
   state: State;
 }> {
@@ -34,7 +52,7 @@ export class BankRoom extends Room<{
 
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  async onCreate(options: { pin?: string; resumeCode?: string }) {
+  async onCreate(options: { pin?: string; resumeCode?: string; operationId?: string }) {
     if (options.resumeCode) {
       const raw = await loadSaveWithFallback(t(options.resumeCode, 30));
 
@@ -42,6 +60,7 @@ export class BankRoom extends Room<{
 
       this.setState(restore(raw));
     } else {
+      reserveCreateOperation(options.operationId);
       this.pin = t(options.pin, 8);
       this.pinHash = hash(this.pin);
 
@@ -1389,7 +1408,7 @@ export class BankRoom extends Room<{
       "report",
       JSON.stringify(
         {
-          version: "0.5.2",
+          version: "0.5.3",
           roomId: this.roomId,
           state: this.state,
         },
