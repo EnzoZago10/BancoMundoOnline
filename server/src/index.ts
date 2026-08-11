@@ -5,34 +5,28 @@ import cors from "cors";
 import { Server } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import { BankRoom } from "./room.js";
-import { getSavePath, importSave, listSaves } from "./persistence.js";
+import { getSavePath, importSave } from "./persistence.js";
 import {
   databaseEnabled,
-  listRoomSavesFromDatabase,
   testDatabaseConnection,
 } from "./database.js";
 await testDatabaseConnection();
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
-app.get("/api/saves", async (_q, r) => {
-  try {
-    if (databaseEnabled) {
-      const databaseSaves =
-        await listRoomSavesFromDatabase();
-
-      return r.json(databaseSaves || []);
-    }
-
-    return r.json(listSaves());
-  } catch (error) {
-    console.error(
-      "Falha ao listar partidas no PostgreSQL:",
-      error,
-    );
-
-    return r.json(listSaves());
-  }
+app.get("/api/health", (_q, r) => {
+  r.set("Cache-Control", "no-store");
+  r.json({
+    ok: true,
+    service: "Banco Mundo Online",
+    version: "0.5.3",
+    database: databaseEnabled ? "connected" : "local-fallback",
+  });
+});
+app.get("/api/saves", (_q, r) => {
+  r.status(410).json({
+    error: "A listagem pública de partidas foi desativada.",
+  });
 });
 app.get("/api/saves/:code", (q, r) => {
   try {
@@ -59,4 +53,4 @@ const port = Number(process.env.PORT || 2567);
 
 await g.listen(port);
 
-console.log(`Banco Mundo Online 0.5.2 executando na porta ${port}`);
+console.log(`Banco Mundo Online 0.5.3 executando na porta ${port}`);

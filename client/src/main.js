@@ -43,12 +43,63 @@ function init() {
   calcRules();
   showRecent();
 }
+let connectionAttempt = null;
+
+const sleep = (ms, signal) => new Promise((resolve, reject) => {
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener("abort", () => {
+    clearTimeout(timer);
+    reject(new DOMException("Cancelado", "AbortError"));
+  }, { once: true });
+});
+
+function setConnectionState(active, title = "", detail = "") {
+  [$("#create"), $("#join"), $("#rejoin")].forEach((button) => {
+    if (button) button.disabled = active;
+  });
+  const box = $("#connectStatus");
+  if (!box) return;
+  box.classList.toggle("hidden", !active);
+  if (title) $("#connectTitle").textContent = title;
+  if (detail) $("#connectDetail").textContent = detail;
+}
+
+async function wakeBackend(signal) {
+  if (isLocal) return;
+  const delays = [0, 1500, 2500, 4000, 6000, 8000, 10000, 12000];
+  let lastError;
+  for (let index = 0; index < delays.length; index += 1) {
+    if (delays[index]) await sleep(delays[index], signal);
+    setConnectionState(true, "Acordando servidor...", `Tentativa ${index + 1} de ${delays.length}. Aguarde sem tocar novamente.`);
+    try {
+      const response = await fetch(`${apiBase}/api/health`, {
+        cache: "no-store",
+        signal,
+      });
+      if (response.ok) {
+        const health = await response.json();
+        if (health?.ok) return;
+      }
+      lastError = Error(`Servidor respondeu ${response.status}.`);
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      lastError = error;
+    }
+  }
+  throw Error(lastError?.message || "O servidor não respondeu. Tente novamente.");
+}
+
 async function connect(create, override) {
+  if (connectionAttempt) return;
+  const controller = new AbortController();
+  connectionAttempt = controller;
+  setConnectionState(true, "Preparando conexão...", "Não pressione os botões novamente.");
   try {
+    await wakeBackend(controller.signal);
+    setConnectionState(true, create ? "Criando sala..." : "Conectando à partida...", "A conexão será feita uma única vez.");
     const wsUrl = isLocal
       ? `ws://${location.hostname}:2567`
       : "wss://bancomundoonline.onrender.com";
-    ``;
     const client = new Client(wsUrl),
       data = override || {
         name: $("#name").value,
@@ -59,6 +110,7 @@ async function connect(create, override) {
           (localStorage.deviceToken = crypto.randomUUID()),
         recoveryCode: $("#recoveryInput").value.trim() || recoveryCode,
       };
+    if (create && !data.operationId) data.operationId = crypto.randomUUID();
     recoveryCode = data.recoveryCode || recoveryCode;
     if (override?.resumeCode) {
       room = await client.joinOrCreate("bank_room", data);
@@ -94,8 +146,15 @@ async function connect(create, override) {
     $("#returnCard").classList.add("hidden");
     $("#game").classList.remove("hidden");
     bind();
-  } catch (e) {
-    toast(e.message);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      toast("Conexão cancelada.");
+    } else {
+      toast(error?.message || "Não foi possível conectar.");
+    }
+  } finally {
+    connectionAttempt = null;
+    setConnectionState(false);
   }
 }
 let renderFrame = 0;
@@ -497,6 +556,7 @@ function download(x) {
 }
 $("#create").onclick = () => connect(true);
 $("#join").onclick = () => connect(false);
+$("#cancelConnect").onclick = () => connectionAttempt?.abort();
 $("#rejoin").onclick = () => {
   const r = JSON.parse(localStorage.getItem(recentKey) || "null");
   if (r)
