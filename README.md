@@ -27,3 +27,7 @@ Os dados ficam no computador que executa o servidor. Para proteção contra perd
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\instalar-e-rodar.ps1
 ```
+
+
+## PWA
+Abra o site por HTTPS e use **Instalar aplicativo** ou **Adicionar à tela inicial**. O cache mantém apenas a interface; operações da partida exigem conexão com o servidor.

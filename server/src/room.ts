@@ -1389,7 +1389,7 @@ export class BankRoom extends Room<{
       "report",
       JSON.stringify(
         {
-          version: "0.5.0",
+          version: "0.5.2",
           roomId: this.roomId,
           state: this.state,
         },
