@@ -23,6 +23,10 @@ const recentKey = "bm-recent-033",
     $("#toast").style.display = "block";
     setTimeout(() => ($("#toast").style.display = "none"), 1900);
   };
+const lowPowerDevice =
+  (Number(navigator.deviceMemory || 8) <= 4 || Number(navigator.hardwareConcurrency || 8) <= 4);
+if (lowPowerDevice) document.documentElement.classList.add("lite");
+
 function init() {
   const po = catalog.properties
       .map((x) => `<option value="${x.id}">${x.name}</option>`)
@@ -94,23 +98,32 @@ async function connect(create, override) {
     toast(e.message);
   }
 }
+let renderFrame = 0;
+function queueRender() {
+  if (renderFrame) return;
+  renderFrame = requestAnimationFrame(() => {
+    renderFrame = 0;
+    render();
+  });
+}
+
 function bind() {
   const c = Callbacks.get(room);
   c.onAdd("players", (p) => {
-    c.listen(p, "balance", render);
-    c.listen(p, "connected", render);
-    c.onAdd(p, "assets", render);
-    c.onRemove(p, "assets", render);
-    render();
+    c.listen(p, "balance", queueRender);
+    c.listen(p, "connected", queueRender);
+    c.onAdd(p, "assets", queueRender);
+    c.onRemove(p, "assets", queueRender);
+    queueRender();
   });
-  c.onRemove("players", render);
-  c.onAdd("pending", render);
-  c.onRemove("pending", render);
-  c.onAdd("debts", render);
-  c.onRemove("debts", render);
-  c.onAdd("events", render);
-  c.listen(room.state, "hostId", render);
-  c.listen(room.state, "locked", render);
+  c.onRemove("players", queueRender);
+  c.onAdd("pending", queueRender);
+  c.onRemove("pending", queueRender);
+  c.onAdd("debts", queueRender);
+  c.onRemove("debts", queueRender);
+  c.onAdd("events", queueRender);
+  c.listen(room.state, "hostId", queueRender);
+  c.listen(room.state, "locked", queueRender);
   room.onMessage("error", toast);
   room.onMessage("profile_recovered", (d) => {
     recoveryCode = d.recoveryCode;
@@ -138,7 +151,7 @@ function bind() {
   room.onLeave(() => {
     if (!intentional) toast("Conexão encerrada.");
   });
-  render();
+  queueRender();
 }
 function getStoredRecoveryCode() {
   if (recoveryCode) return recoveryCode;
@@ -209,6 +222,7 @@ async function shareRecoveryCode() {
 }
 function render() {
   updateRecoveryCard();
+  renderRankings();
   const ps = [...room.state.players.entries()],
     adm = room.state.hostId === me,
     opts = ps
@@ -372,6 +386,7 @@ function events() {
   const q = $("#search").value.toLowerCase();
   $("#events").innerHTML = [...room.state.events]
     .reverse()
+    .slice(0, lowPowerDevice ? 40 : 100)
     .filter((e) => !q || e.message.toLowerCase().includes(q))
     .map(
       (e) =>
@@ -379,11 +394,61 @@ function events() {
     )
     .join("");
 }
+function calculatePlayerRanking(player) {
+  const assets = [...player.assets];
+  const propertyCount = assets.filter((asset) => asset.kind === "property").length;
+  const organizationCount = assets.filter((asset) => asset.kind === "organization").length;
+  const assetValue = assets.reduce((sum, asset) => {
+    const purchase = Number(asset.purchase || 0);
+    if (asset.kind !== "property") return sum + purchase;
+    return sum + purchase + (asset.mortgaged ? 0 : propertyDevelopmentCost(asset, asset.development));
+  }, 0);
+  return {
+    money: Number(player.balance || 0),
+    general: Number(player.balance || 0) + assetValue,
+    assetCount: assets.length,
+    propertyCount,
+    organizationCount,
+  };
+}
+function rankingMarkup(players, value, detail) {
+  return players
+    .map(({ id, player, metrics }, index) =>
+      `<li class="ranking-item ${id === me ? "me" : ""}"><span class="rank-position">${index + 1}º</span><span>${player.name}${id === me ? " (você)" : ""}${player.bankrupt ? " • 🔒 Falido" : ""}<small class="small">${detail(metrics)}</small></span><strong>${value(metrics)}</strong></li>`)
+    .join("");
+}
+function renderRankings() {
+  if (!room?.state?.players) return;
+  const players = [...room.state.players.entries()].map(([id, player]) => ({
+    id, player, metrics: calculatePlayerRanking(player),
+  }));
+  const general = [...players].sort((a, b) => b.metrics.general - a.metrics.general || a.player.name.localeCompare(b.player.name, "pt-BR"));
+  const money = [...players].sort((a, b) => b.metrics.money - a.metrics.money || a.player.name.localeCompare(b.player.name, "pt-BR"));
+  const assets = [...players].sort((a, b) => b.metrics.assetCount - a.metrics.assetCount || b.metrics.general - a.metrics.general || a.player.name.localeCompare(b.player.name, "pt-BR"));
+  const generalBox = $("#rankGeneral"), moneyBox = $("#rankMoney"), assetsBox = $("#rankAssets");
+  if (generalBox) generalBox.innerHTML = rankingMarkup(general, (m) => fmt(m.general), (m) => `<br>Saldo + bens e construções`);
+  if (moneyBox) moneyBox.innerHTML = rankingMarkup(money, (m) => fmt(m.money), () => `<br>Saldo disponível`);
+  if (assetsBox) assetsBox.innerHTML = rankingMarkup(assets, (m) => String(m.assetCount), (m) => `<br>${m.propertyCount} propriedades • ${m.organizationCount} organizações`);
+}
+
+function propertyDevelopmentCost(property, development) {
+  const level = Math.max(0, Math.min(5, Number(development) || 0));
+  return level === 5
+    ? 4 * Number(property.houseCost || 0) + Number(property.condominiumCost || 0)
+    : level * Number(property.houseCost || 0);
+}
 function showCatalog() {
   const p = P($("#prop").value),
-    o = O($("#org").value);
+    o = O($("#org").value),
+    development = Number($("#dev").value || 0),
+    construction = propertyDevelopmentCost(p, development),
+    total = Number(p.purchase || 0) + construction,
+    currentPlayer = room?.state?.players?.get(me),
+    balanceAfter = currentPlayer ? Number(currentPlayer.balance) - total : null;
   $("#propInfo").innerHTML =
-    `Compra ${fmt(p.purchase)} • Casa ${fmt(p.houseCost)} • Hipoteca ${fmt(p.mortgage)}`;
+    `Compra ${fmt(p.purchase)} • Casa ${fmt(p.houseCost)} • Condomínio ${fmt(p.condominiumCost)} • Hipoteca ${fmt(p.mortgage)}`;
+  $("#propEstimate").innerHTML =
+    `<strong>Total previsto: ${fmt(total)}</strong><div>Propriedade ${fmt(p.purchase)} + construções ${fmt(construction)}</div>${balanceAfter === null ? "" : `<div>Seu saldo após aprovação: ${fmt(balanceAfter)}</div>`}`;
   $("#orgInfo").innerHTML =
     `Compra ${fmt(o.purchase)} • Dados × ${fmt(o.multiplier)} • Hipoteca ${fmt(o.mortgage)}`;
 }
@@ -518,6 +583,7 @@ $("#propose").onclick = () =>
     note: $("#note").value,
   });
 $("#prop").onchange = showCatalog;
+$("#dev").onchange = showCatalog;
 $("#org").onchange = showCatalog;
 $("#rentProp").onchange = calcRules;
 $("#rentDev").onchange = calcRules;
@@ -608,3 +674,91 @@ $("#importBackup").onclick = async () => {
     toast(e.message);
   }
 };
+
+// PWA: instalação, conectividade e atualização segura da interface.
+let deferredInstallPrompt = null;
+let waitingServiceWorker = null;
+
+function updateConnectionUI() {
+  const offline = !navigator.onLine;
+  const banner = document.querySelector("#offlineBanner");
+  if (banner) banner.classList.toggle("hidden", !offline);
+  document.documentElement.dataset.online = offline ? "false" : "true";
+}
+
+window.addEventListener("online", () => {
+  updateConnectionUI();
+  if (typeof toast === "function") toast("Conexão restaurada.");
+});
+window.addEventListener("offline", updateConnectionUI);
+updateConnectionUI();
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  document.querySelector("#installApp")?.classList.remove("hidden");
+});
+
+window.addEventListener("appinstalled", () => {
+  deferredInstallPrompt = null;
+  document.querySelector("#installApp")?.classList.add("hidden");
+  if (typeof toast === "function") toast("Banco Mundo instalado.");
+});
+
+document.querySelector("#installApp")?.addEventListener("click", async () => {
+  if (!deferredInstallPrompt) {
+    if (typeof toast === "function") toast("Use 'Adicionar à tela inicial' no menu do navegador.");
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  document.querySelector("#installApp")?.classList.add("hidden");
+});
+
+document.querySelector("#updateApp")?.addEventListener("click", () => {
+  if (waitingServiceWorker) {
+    waitingServiceWorker.postMessage({ type: "SKIP_WAITING" });
+  } else {
+    location.reload();
+  }
+});
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", async () => {
+    try {
+      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      const showUpdate = (worker) => {
+        waitingServiceWorker = worker;
+        document.querySelector("#updateCard")?.classList.remove("hidden");
+      };
+      if (registration.waiting) showUpdate(registration.waiting);
+      registration.addEventListener("updatefound", () => {
+        const worker = registration.installing;
+        worker?.addEventListener("statechange", () => {
+          if (worker.state === "installed" && navigator.serviceWorker.controller) showUpdate(worker);
+        });
+      });
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshing) return;
+        refreshing = true;
+        location.reload();
+      });
+    } catch (error) {
+      console.warn("Não foi possível registrar a PWA.", error);
+    }
+  });
+}
+
+// Sem servidor, ações que mudariam a partida são bloqueadas; navegação e manual continuam disponíveis.
+document.addEventListener("click", (event) => {
+  if (navigator.onLine) return;
+  const button = event.target.closest("button");
+  if (!button) return;
+  const allowed = button.matches(".tab, #theme, #installApp, #updateApp");
+  if (allowed) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (typeof toast === "function") toast("Operação indisponível sem conexão com o servidor.");
+}, true);
