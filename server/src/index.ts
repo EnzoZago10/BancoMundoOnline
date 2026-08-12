@@ -19,7 +19,7 @@ app.get("/api/health", (_q, r) => {
   r.json({
     ok: true,
     service: "Banco Mundo Online",
-    version: "0.5.3",
+    version: "0.6.2",
     database: databaseEnabled ? "connected" : "local-fallback",
   });
 });
@@ -53,4 +53,4 @@ const port = Number(process.env.PORT || 2567);
 
 await g.listen(port);
 
-console.log(`Banco Mundo Online 0.5.3 executando na porta ${port}`);
+console.log(`Banco Mundo Online 0.6.2 Redesign executando na porta ${port}`);

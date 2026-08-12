@@ -18,16 +18,85 @@ const recentKey = "bm-recent-033",
   fmt = (n) => Number(n).toLocaleString("pt-BR"),
   P = (id) => catalog.properties.find((x) => x.id === id),
   O = (id) => catalog.organizations.find((x) => x.id === id),
-  toast = (m) => {
-    $("#toast").textContent = m;
-    $("#toast").style.display = "block";
-    setTimeout(() => ($("#toast").style.display = "none"), 1900);
+  toast = (m, type = "auto") => {
+    const text = String(m || "");
+    const inferred = type === "auto" ? (/erro|não foi|inválid|incorret|falha/i.test(text) ? "error" : /aguarde|atenção|aviso/i.test(text) ? "warning" : /copiad|instalad|restaurad|enviad|sucesso|conclu/i.test(text) ? "success" : "info") : type;
+    const icons = { success: "✓", error: "!", warning: "⚠", info: "i" };
+    const element = $("#toast");
+    element.dataset.toastType = inferred;
+    element.innerHTML = `<span class="toast-icon" aria-hidden="true">${icons[inferred]}</span>${text}`;
+    element.style.display = "block";
+    clearTimeout(element._hideTimer);
+    element._hideTimer = setTimeout(() => (element.style.display = "none"), inferred === "error" ? 3600 : 2400);
   };
 const lowPowerDevice =
   (Number(navigator.deviceMemory || 8) <= 4 || Number(navigator.hardwareConcurrency || 8) <= 4);
 if (lowPowerDevice) document.documentElement.classList.add("lite");
 
+
+const fieldLabels = {
+  name: "Nome do jogador", balance: "Saldo inicial", code: "Código temporário ou permanente",
+  pin: "PIN da partida", recoveryInput: "Código pessoal de recuperação (opcional)",
+  importFile: "Arquivo de backup", prop: "Propriedade", dev: "Nível de construção",
+  propReason: "Motivo da compra", org: "Organização", orgReason: "Motivo da compra",
+  to: "Destinatário", amount: "Valor do pagamento", reason: "Motivo do pagamento",
+  bankAmount: "Valor da operação bancária", bankReason: "Motivo da operação",
+  rentProp: "Propriedade para calcular aluguel", rentDev: "Nível de construção",
+  fmiKind: "Tipo de operação FMI", diceSum: "Soma dos dados", creditor: "Credor",
+  debtAmount: "Valor original da dívida", cash: "Dinheiro oferecido", note: "Observação",
+  search: "Buscar no histórico", manualSearch: "Buscar no manual", transferAdminPlayer: "Novo ADM"
+};
+
+function decorateInterface() {
+  document.querySelectorAll("button").forEach((button) => {
+    if (!button.getAttribute("type")) button.type = "button";
+  });
+  Object.entries(fieldLabels).forEach(([id, text]) => {
+    const control = document.getElementById(id);
+    if (!control || control.closest(".field-wrap")) return;
+    const wrapper = document.createElement("div");
+    wrapper.className = "field-wrap";
+    const label = document.createElement("label");
+    label.className = "field-label";
+    label.htmlFor = id;
+    label.textContent = text;
+    control.parentNode.insertBefore(wrapper, control);
+    wrapper.append(label, control);
+  });
+  const lobby = document.querySelector("#lobby");
+  if (lobby && !lobby.querySelector(".lobby-hero")) {
+    const hero = document.createElement("div");
+    hero.className = "lobby-hero";
+    hero.innerHTML = "<h2>Sua partida, organizada em um só lugar</h2><p>Crie uma sala, convide o grupo e gerencie dinheiro, propriedades e decisões em tempo real.</p>";
+    lobby.prepend(hero);
+  }
+  const create = document.querySelector("#create");
+  const join = document.querySelector("#join");
+  if (create && join && !create.parentElement.classList.contains("lobby-actions")) {
+    create.parentElement.classList.add("lobby-actions");
+  }
+  const tabs = [...document.querySelectorAll(".tab")];
+  const tablist = document.querySelector(".tabs");
+  if (tablist) tablist.setAttribute("role", "tablist");
+  tabs.forEach((tab) => {
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", tab.dataset.tab || "");
+    tab.setAttribute("aria-selected", String(tab.classList.contains("active")));
+  });
+  document.querySelectorAll(".panel").forEach((panel) => {
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-label", panel.id);
+  });
+  const themeButton = document.querySelector("#theme");
+  if (themeButton) themeButton.setAttribute("aria-label", "Alternar entre tema claro e escuro");
+  const modal = document.querySelector("#endModal");
+  modal?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") document.querySelector("#endBack")?.click();
+  });
+}
+
 function init() {
+  decorateInterface();
   const po = catalog.properties
       .map((x) => `<option value="${x.id}">${x.name}</option>`)
       .join(""),
@@ -91,6 +160,7 @@ async function wakeBackend(signal) {
 
 async function connect(create, override) {
   if (connectionAttempt) return;
+  if (!validateConnectionForm(create, override)) return;
   const controller = new AbortController();
   connectionAttempt = controller;
   setConnectionState(true, "Preparando conexão...", "Não pressione os botões novamente.");
@@ -279,6 +349,77 @@ async function shareRecoveryCode() {
     toast("Não foi possível compartilhar ou copiar.");
   }
 }
+
+function emptyState(icon, title, detail) {
+  return `<div class="empty-state"><span class="empty-icon" aria-hidden="true">${icon}</span><strong>${title}</strong><p>${detail}</p></div>`;
+}
+function eventCategory(message) {
+  const text = String(message || "").toLocaleLowerCase("pt-BR");
+  if (/fal[eê]ncia|falido/.test(text)) return ["falencia", "Falência"];
+  if (/hipotec/.test(text)) return ["hipoteca", "Hipoteca"];
+  if (/d[ií]vida|acordo|proposta/.test(text)) return ["divida", "Dívida"];
+  if (/adm|expuls|sala|entrada|bloque/.test(text)) return ["administracao", "Administração"];
+  if (/propriedade|institui|patrim|casa|condom[ií]nio/.test(text)) return ["patrimonio", "Patrimônio"];
+  if (/pag|saldo|banco|dinheiro|fmi|b[oô]nus/.test(text)) return ["financeiro", "Financeiro"];
+  return ["sistema", "Sistema"];
+}
+function updateSummaryAndBadges(ps, adm) {
+  const mePlayer = room.state.players.get(me);
+  $("#summaryBalance").textContent = mePlayer ? fmt(mePlayer.balance) : "0";
+  $("#summaryOnline").textContent = String(ps.filter(([, player]) => player.connected).length);
+  const visiblePending = [...room.state.pending.values()].filter((q) => q.fromId === me || (q.kind === "money" ? q.toId === me : adm));
+  const needsMe = visiblePending.filter((q) => q.fromId !== me && (q.kind === "money" ? q.toId === me : adm)).length;
+  $("#summaryPending").textContent = String(visiblePending.length);
+  $("#summaryRoom").textContent = room.state.paused ? "Pausada" : room.state.locked ? "Bloqueada" : "Aberta";
+  [$("#approvalBadge"), $("#moreApprovalBadge")].forEach((badge) => {
+    if (!badge) return;
+    badge.textContent = String(visiblePending.length);
+    badge.classList.toggle("hidden", visiblePending.length === 0);
+    badge.classList.toggle("waiting", needsMe === 0);
+    badge.setAttribute("aria-label", `${visiblePending.length} aprovações pendentes`);
+  });
+}
+function playerMarkup(id, player, adm) {
+  const badges = [
+    id === me ? '<span class="status-chip badge-online">Você</span>' : "",
+    id === room.state.hostId ? '<span class="status-chip badge-admin">ADM</span>' : "",
+    `<span class="status-chip ${player.connected ? "badge-online" : "badge-offline"}">${player.connected ? "Online" : "Offline"}</span>`,
+    player.bankrupt ? '<span class="status-chip badge-bankrupt">Falido</span>' : "",
+  ].join("");
+  const actions = adm && id !== me ? (player.connected ? `<button class="danger" data-kick="${id}">Expulsar</button>` : `<button class="danger" data-remove="${id}">Remover offline</button>`) : "";
+  return `<div class="player ${id === me ? "me" : ""} ${id === room.state.hostId ? "admin" : ""} ${player.connected ? "" : "offline"} ${player.bankrupt ? "bankrupt" : ""}"><div class="player-card-head"><span class="player-name">${player.name}</span><span class="player-badges">${badges}</span></div><div class="player-balance"><span>Saldo</span><strong>${fmt(player.balance)}</strong></div><div class="player-stats"><div class="player-stat"><span class="small">Enviado</span><br><strong>${fmt(player.sent)}</strong></div><div class="player-stat"><span class="small">Recebido</span><br><strong>${fmt(player.received)}</strong></div></div>${actions ? `<div class="player-actions">${actions}</div>` : ""}</div>`;
+}
+function clearFieldError(control) {
+  if (!control) return;
+  control.classList.remove("input-invalid", "shake");
+  control.removeAttribute("aria-invalid");
+  const error = control.parentElement?.querySelector(".field-error");
+  error?.remove();
+}
+function showFieldError(control, message) {
+  if (!control) return false;
+  clearFieldError(control);
+  control.classList.add("input-invalid", "shake");
+  control.setAttribute("aria-invalid", "true");
+  const error = document.createElement("span");
+  error.className = "field-error";
+  error.textContent = message;
+  control.insertAdjacentElement("afterend", error);
+  control.focus();
+  toast(message, "error");
+  return true;
+}
+function validateConnectionForm(create, override) {
+  if (override) return true;
+  const name = $("#name");
+  const pinField = $("#pin");
+  [name, pinField, $("#code")].forEach(clearFieldError);
+  if (!name.value.trim()) return !showFieldError(name, "Informe o nome do jogador.");
+  if (!pinField.value.trim()) return !showFieldError(pinField, "Informe o PIN da partida.");
+  if (!create && !$("#code").value.trim()) return !showFieldError($("#code"), "Informe o código da sala ou da partida.");
+  return true;
+}
+
 function render() {
   updateRecoveryCard();
   renderRankings();
@@ -288,6 +429,7 @@ function render() {
       .filter(([id, p]) => id !== me && p.connected)
       .map(([id, p]) => `<option value="${id}">${p.name}</option>`)
       .join("");
+  updateSummaryAndBadges(ps, adm);
   $("#roomName").textContent = room.state.roomName;
   $("#saveCode").textContent =
     `Código permanente da partida: ${room.state.saveCode} • Último salvamento: ${room.state.lastSavedAt ? new Date(room.state.lastSavedAt).toLocaleString("pt-BR") : "agora"}`;
@@ -300,12 +442,7 @@ function render() {
   $("#lock").textContent = room.state.locked
     ? "Reabrir entradas"
     : "Bloquear entradas";
-  $("#players").innerHTML = ps
-    .map(
-      ([id, p]) =>
-        `<div class="player ${p.bankrupt ? "bankrupt" : ""}"><strong>${p.name}${id === me ? " (você)" : ""}${id === room.state.hostId ? ` 👑 ADM • ${p.connected ? "Online" : "Offline"}` : ""}${p.bankrupt ? " • 🔒 FALIDO" : ""}</strong> • ${fmt(p.balance)}<div class="small">${p.connected ? "🟢 Online" : "⚪ Offline"} • Enviado ${fmt(p.sent)} • Recebido ${fmt(p.received)}</div>${adm && id !== me ? (p.connected ? `<button class="danger" data-kick="${id}">Expulsar</button>` : `<button class="danger" data-remove="${id}">Remover offline</button>`) : ""}${adm && id !== me ? (p.bankrupt ? `<button data-restore-bankrupt="${id}">Desfazer falência</button>` : `<button class="danger" data-declare-bankrupt="${id}">Declarar falência</button>`) : ""}</div>`,
-    )
-    .join("");
+  $("#players").innerHTML = ps.map(([id, p]) => playerMarkup(id, p, adm)).join("") || emptyState("👥", "Nenhum jogador", "Os jogadores conectados aparecerão aqui.");
   const transferSelect = $("#transferAdminPlayer");
   if (transferSelect) {
     const currentValue = transferSelect.value;
@@ -420,7 +557,7 @@ function debts() {
             `<div class="pending ${d.creditorId === me ? "incoming" : ""}"><strong>${d.creditorId === me ? "AÇÃO NECESSÁRIA" : "AGUARDANDO"}</strong><div>Dívida ${fmt(d.originalAmount)} • Dinheiro ${fmt(d.cashOffered)}</div><div class="row">${d.creditorId === me ? `<button data-dy="${d.id}">Aceitar</button><button data-dn="${d.id}">Recusar</button>` : `<button data-dc="${d.id}">Cancelar</button>`}</div></div>`,
         )
         .join("")
-    : '<div class="empty">Nenhum acordo.</div>';
+    : emptyState("🤝", "Nenhuma proposta de dívida", "Novos acordos aparecerão aqui.");
   document
     .querySelectorAll("[data-dy]")
     .forEach(
@@ -442,16 +579,12 @@ function debts() {
     );
 }
 function events() {
-  const q = $("#search").value.toLowerCase();
-  $("#events").innerHTML = [...room.state.events]
-    .reverse()
-    .slice(0, lowPowerDevice ? 40 : 100)
-    .filter((e) => !q || e.message.toLowerCase().includes(q))
-    .map(
-      (e) =>
-        `<div class="event"><strong>#${String(e.seq).padStart(3, "0")}</strong> ${e.message}<div class="small">${new Date(e.at).toLocaleTimeString("pt-BR")}</div></div>`,
-    )
-    .join("");
+  const query = $("#search").value.toLocaleLowerCase("pt-BR");
+  const filtered = [...room.state.events].reverse().slice(0, lowPowerDevice ? 40 : 100).filter((event) => !query || event.message.toLocaleLowerCase("pt-BR").includes(query));
+  $("#events").innerHTML = filtered.length ? filtered.map((event) => {
+    const [type, label] = eventCategory(event.message);
+    return `<div class="event" data-event-type="${type}"><span class="event-kind">${label}</span><strong>#${String(event.seq).padStart(3, "0")}</strong> ${event.message}<div class="small">${new Date(event.at).toLocaleTimeString("pt-BR")}</div></div>`;
+  }).join("") : emptyState("🔍", "Nenhum evento encontrado", "Tente buscar por outra palavra.");
 }
 function calculatePlayerRanking(player) {
   const assets = [...player.assets];
@@ -684,9 +817,9 @@ const manualTopics = [
   ["Solução de problemas", "Use navegador normal ou APK para preservar o perfil. Em aparelho novo, informe o código pessoal. Se a versão parecer antiga, recarregue o site."],
 ];
 function renderManual() {
-  const term = ($("#manualSearch")?.value || "").toLocaleLowerCase("pt-BR");
-  const topics = manualTopics.filter(([title, text]) => `${title} ${text}`.toLocaleLowerCase("pt-BR").includes(term));
-  $("#manualContent").innerHTML = topics.map(([title, text]) => `<article class="manual-topic"><h3>${title}</h3><p>${text}</p></article>`).join("") || `<div class="empty">Nenhum assunto encontrado.</div>`;
+  const term = $("#manualSearch").value.trim().toLocaleLowerCase("pt-BR");
+  const topics = manualTopics.filter(([title, text]) => !term || `${title} ${text}`.toLocaleLowerCase("pt-BR").includes(term));
+  $("#manualContent").innerHTML = topics.length ? topics.map(([title, text], index) => `<details class="manual-topic" ${term || index === 0 ? "open" : ""}><summary>${title}</summary><p>${text}</p></details>`).join("") : emptyState("📖", "Nenhum assunto encontrado", "Tente buscar por outro termo.");
 }
 init();
 renderManual();
@@ -822,3 +955,36 @@ document.addEventListener("click", (event) => {
   event.stopImmediatePropagation();
   if (typeof toast === "function") toast("Operação indisponível sem conexão com o servidor.");
 }, true);
+
+
+document.querySelector(".tabs")?.addEventListener("click", () => {
+  requestAnimationFrame(() => document.querySelectorAll(".tab").forEach((tab) => {
+    tab.setAttribute("aria-selected", String(tab.classList.contains("active")));
+  }));
+});
+
+
+const moreTabButton = document.querySelector("#moreTab");
+const moreMenu = document.querySelector("#moreMenu");
+moreTabButton?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const open = moreMenu.classList.toggle("hidden") === false;
+  moreTabButton.setAttribute("aria-expanded", String(open));
+});
+moreMenu?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-jump-tab]");
+  if (!button) return;
+  document.querySelector(`.tab[data-tab="${button.dataset.jumpTab}"]`)?.click();
+  moreMenu.classList.add("hidden");
+  moreTabButton?.setAttribute("aria-expanded", "false");
+});
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#moreMenu,#moreTab")) {
+    moreMenu?.classList.add("hidden");
+    moreTabButton?.setAttribute("aria-expanded", "false");
+  }
+});
+document.querySelectorAll("input,select,textarea").forEach((control) => {
+  control.addEventListener("input", () => clearFieldError(control));
+  control.addEventListener("change", () => clearFieldError(control));
+});
