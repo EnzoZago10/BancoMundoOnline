@@ -1,6 +1,6 @@
 {
   "id": "/",
-  "name": "Banco Mundo Online",
+  "name": "Banco Mundo Online 0.6.2 Redesign UX",
   "short_name": "Banco Mundo",
   "description": "Assistente online e multiplayer para partidas de Banco Mundo.",
   "lang": "pt-BR",
@@ -13,8 +13,8 @@
     "minimal-ui"
   ],
   "orientation": "portrait-primary",
-  "background_color": "#07171d",
-  "theme_color": "#087ea4",
+  "background_color": "#071817",
+  "theme_color": "#0b6b68",
   "categories": [
     "games",
     "utilities"

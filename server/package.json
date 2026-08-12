@@ -1,6 +1,6 @@
 {
   "name": "banco-mundo-online-server",
-  "version": "0.5.3",
+  "version": "0.6.2",
   "private": true,
   "type": "module",
   "scripts": {
