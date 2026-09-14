@@ -1,11 +1,15 @@
 {
   "name": "banco-mundo-online-server",
-  "version": "0.6.2",
+  "version": "0.9.2",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "tsx --test test/*.test.ts",
+    "migrate": "tsx src/migrate.ts",
+    "test:integration": "tsx --test test/*.integration.ts"
   },
   "dependencies": {
     "@colyseus/core": "^0.17.46",
@@ -21,6 +25,7 @@
     "@types/node": "^24.0.0",
     "@types/pg": "^8.20.4",
     "tsx": "^4.20.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "@colyseus/sdk": "^0.17.26"
   }
 }

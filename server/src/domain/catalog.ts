@@ -1,0 +1,12 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+export type SourceStatus="CONFIRMED"|"LEGACY_UNVERIFIED"|"SOURCE_MISSING"|"APP_BEHAVIOR";
+export type PropertyData={id:string;name:string;group:string;purchase:number;rent:number[];houseCost:number;condominiumCost:number;mortgage:number;sources?:{financial:SourceStatus;group:SourceStatus}};
+export type OrganizationData={id:string;name:string;purchase:number;multiplier:number;mortgage:number;sources?:{financial:SourceStatus}};
+export type Catalog={developmentLabels:string[];properties:PropertyData[];organizations:OrganizationData[]};
+const path=fileURLToPath(new URL("../../../shared/catalog.json",import.meta.url));
+export const catalog:Catalog=JSON.parse(fs.readFileSync(path,"utf8"));
+export const propertiesById=new Map(catalog.properties.map(x=>[x.id,x]));
+export const organizationsById=new Map(catalog.organizations.map(x=>[x.id,x]));
+export const catalogById=new Map<string,PropertyData|OrganizationData>([...catalog.properties.map(x=>[x.id,x] as const),...catalog.organizations.map(x=>[x.id,x] as const)]);
+export const isProperty=(x:PropertyData|OrganizationData):x is PropertyData=>"rent" in x;

@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Banco Mundo Online 0.6.2 Redesign UX",
+  "name": "Banco Mundo Online",
   "short_name": "Banco Mundo",
-  "description": "Assistente online e multiplayer para partidas de Banco Mundo.",
+  "description": "Companheiro simples para sua partida física de Banco Mundo.",
   "lang": "pt-BR",
   "start_url": "/?source=pwa",
   "scope": "/",
