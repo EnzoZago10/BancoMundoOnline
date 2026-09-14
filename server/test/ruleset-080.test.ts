@@ -1,0 +1,8 @@
+import test from "node:test";import assert from "node:assert/strict";
+import { GameEngine } from "../src/domain/game-engine.ts";import { stateWithPlayers } from "./helpers.ts";
+function buy(g:GameEngine, id:string){return g.purchaseAsset("a",id)}
+
+test("oficial exige grupo completo",()=>{const s=stateWithPlayers("a","b"),g=new GameEngine(s);const a=buy(g,"londres");assert.throws(()=>g.changeDevelopment("a",a.id,1),/todas as propriedades/);});
+test("grupo livre permite construir com uma propriedade",()=>{const s=stateWithPlayers("a","b"),g=new GameEngine(s);s.rules.preset="custom";s.rules.requireFullGroupForBuilding=false;const a=buy(g,"londres");assert.doesNotThrow(()=>g.changeDevelopment("a",a.id,1));});
+test("grupo livre + uniforme equilibra apenas propriedades do mesmo dono",()=>{const s=stateWithPlayers("a","b"),g=new GameEngine(s);s.rules.preset="custom";s.rules.requireFullGroupForBuilding=false;s.rules.requireEvenBuilding=true;const london=buy(g,"londres"),berlin=buy(g,"berlim");g.changeDevelopment("a",london.id,1);assert.throws(()=>g.changeDevelopment("a",london.id,2),/uniformemente/);assert.doesNotThrow(()=>g.changeDevelopment("a",berlin.id,1));});
+test("construção totalmente livre não exige equilíbrio do restante do grupo",()=>{const s=stateWithPlayers("a","b"),g=new GameEngine(s);s.rules.preset="custom";s.rules.requireFullGroupForBuilding=false;s.rules.requireEvenBuilding=false;const london=buy(g,"londres"),berlin=buy(g,"berlim");g.changeDevelopment("a",london.id,1);g.changeDevelopment("a",london.id,2);g.changeDevelopment("a",london.id,3);g.changeDevelopment("a",london.id,4);assert.equal(berlin.development,0);assert.doesNotThrow(()=>g.changeDevelopment("a",london.id,5));});

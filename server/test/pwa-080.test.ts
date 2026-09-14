@@ -1,0 +1,5 @@
+import test from "node:test";import assert from "node:assert/strict";import fs from "node:fs";import path from "node:path";
+const root=path.resolve(process.cwd(),"../client/public");
+test("PWA 0.9.2 troca namespace de cache e remove caches antigos",()=>{const sw=fs.readFileSync(path.join(root,"sw.js"),"utf8");assert.match(sw,/banco-mundo-pwa-0\.9\.2/);assert.match(sw,/caches\.delete/);assert.match(sw,/skipWaiting/);assert.match(sw,/clients\.claim/);assert.doesNotMatch(sw,/cacheCurrentAppShell\(\)\.then\(\(\) => self\.skipWaiting\(\)\)/);});
+test("primeiro clients.claim da PWA não recarrega uma sala recém-criada",()=>{const shell=fs.readFileSync(path.resolve(root,"../src/shell.js"),"utf8");assert.match(shell,/hadServiceWorkerControllerAtLoad/);assert.match(shell,/!hadServiceWorkerControllerAtLoad && !updateActivationRequested/);});
+test("manifest simples mantém instalação standalone",()=>{const m=JSON.parse(fs.readFileSync(path.join(root,"manifest.webmanifest"),"utf8"));assert.equal(m.name,"Banco Mundo Online");assert.equal(m.short_name,"Banco Mundo");assert.equal(m.display,"standalone");assert.ok(m.icons.length>=2);});

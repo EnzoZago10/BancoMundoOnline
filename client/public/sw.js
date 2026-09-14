@@ -1,4 +1,4 @@
-const CACHE_VERSION = "banco-mundo-pwa-0.6.2";
+const CACHE_VERSION = "banco-mundo-pwa-0.9.2";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const CORE_FILES = [
   "/offline.html",
@@ -26,7 +26,7 @@ async function cacheCurrentAppShell() {
 }
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(cacheCurrentAppShell().then(() => self.skipWaiting()));
+  event.waitUntil(cacheCurrentAppShell());
 });
 
 self.addEventListener("activate", (event) => {

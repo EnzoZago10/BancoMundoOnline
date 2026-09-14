@@ -12,3 +12,8 @@ server/data/
 *.jks
 *.keystore
 *.apk
+
+# Build e testes gerados localmente
+server/dist/
+playwright-report/
+test-results/

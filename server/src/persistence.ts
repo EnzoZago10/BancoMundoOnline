@@ -1,339 +1,70 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { databaseEnabled, loadRoomFromDatabase, saveRoomToDatabase } from "./database.js";
+import { Asset, Debt, Event, GameRules, Liability, Pending, Player, PlayerStats, Settlement, State, Trade } from "./state.js";
+import { APP_VERSION, SAVE_FORMAT_VERSION } from "./version.js";
+import { hashPin, hashToken, verifyPin } from "./domain/security.js";
+import { HOUSE_STOCK } from "./domain/rules.js";
+import { catalogById, isProperty } from "./domain/catalog.js";
+import { calculateHousesRemaining, housePiecesForDevelopment, validateGameInvariants } from "./domain/invariants.js";
+import { normalizeRules } from "./domain/ruleset.js";
 
-import { loadRoomFromDatabase, saveRoomToDatabase } from "./database.js";
+const root=path.resolve(process.cwd(),"data"),rooms=path.join(root,"rooms"),backups=path.join(root,"backups"),corrupt=path.join(root,"corrupt");
+await Promise.all([rooms,backups,corrupt].map(d=>fs.mkdir(d,{recursive:true})));
+export const code=()=>crypto.randomBytes(8).toString("hex").toUpperCase();
+const clean=(v:string)=>v.replace(/[^A-Z0-9-]/gi,"");
+const file=(saveCode:string)=>path.join(rooms,`${clean(saveCode)}.json`);
+const finite=(v:any,fallback=0)=>Number.isFinite(Number(v))?Number(v):fallback;
+const bounded=(v:any,min:number,max:number,fallback=0)=>Math.max(min,Math.min(max,finite(v,fallback)));
+const plain=(state:State)=>JSON.parse(JSON.stringify(state));
+const privateData=(state:State)=>Object.fromEntries([...state.players].map(([id,p])=>[id,{deviceTokenHash:p.deviceTokenHash||"",recoveryTokenHash:p.recoveryTokenHash||"",bankruptcyBackup:p.bankruptcyBackup||""}]));
+export function serialize(state:State,pinHash:string){return{format:"BancoMundoSave",version:SAVE_FORMAT_VERSION,appVersion:APP_VERSION,savedAt:new Date().toISOString(),pinHash,privateData:privateData(state),state:plain(state)};}
+export class SaveConflictError extends Error{code="SAVE_CONFLICT";constructor(){super("SAVE_CONFLICT: outra instância salvou esta partida a partir da mesma revisão. A sala foi pausada para evitar sobrescrita.");}}
 
-import { Asset, Debt, Event, Pending, Player, State } from "./state.js";
+async function exists(p:string){try{await fs.access(p);return true;}catch{return false;}}
+async function writeLocal(serialized:any){const target=file(serialized.state.saveCode),temporary=`${target}.${process.pid}.tmp`;if(await exists(target)){const stamp=new Date().toISOString().replace(/[:.]/g,"-");await fs.copyFile(target,path.join(backups,`${clean(serialized.state.saveCode)}-${stamp}.json`));const old=(await fs.readdir(backups)).filter(n=>n.startsWith(`${clean(serialized.state.saveCode)}-`)).sort().reverse();await Promise.all(old.slice(10).map(n=>fs.rm(path.join(backups,n),{force:true})));}await fs.writeFile(temporary,JSON.stringify(serialized,null,2),"utf8");await fs.rename(temporary,target);}
 
-const root = path.resolve(process.cwd(), "data");
+export async function atomicSave(state:State,pinHash:string){validateGameInvariants(state);const expected=Math.max(0,finite(state.revision)),next=expected+1,oldSavedAt=state.lastSavedAt;state.revision=next;state.lastSavedAt=Date.now();const serialized=serialize(state,pinHash),status=state.ended?"ended":state.paused?"paused":"active";if(databaseEnabled){let result;try{result=await saveRoomToDatabase(state.saveCode,state.roomName,serialized.state,serialized.privateData,pinHash,status,expected,next);}catch(error){state.revision=expected;state.lastSavedAt=oldSavedAt;throw error;}if(result==="conflict"){state.revision=expected;state.lastSavedAt=oldSavedAt;throw new SaveConflictError();}try{await writeLocal(serialized);}catch(error){console.error("Mirror local não pôde ser atualizado após CAS PostgreSQL:",(error as Error).message);}return next;}await writeLocal(serialized);return next;}
 
-const rooms = path.join(root, "rooms");
-
-const backups = path.join(root, "backups");
-
-const corrupt = path.join(root, "corrupt");
-
-for (const directory of [rooms, backups, corrupt]) {
-  fs.mkdirSync(directory, {
-    recursive: true,
-  });
+function checkKeys(obj:any,allowed:string[],label:string){if(!obj||typeof obj!=="object"||Array.isArray(obj))throw Error(`${label} inválido.`);const set=new Set(allowed);for(const k of Object.keys(obj))if(!set.has(k))throw Error(`${label}: campo inesperado ${k}.`);}
+function validateBackupShape(raw:any){
+  if(!raw||raw.format!=="BancoMundoSave")throw Error("Backup inválido: format incorreto.");const s=raw.state;if(!s||typeof s!=="object"||Array.isArray(s))throw Error("Backup inválido: state ausente.");const players=s.players;if(!players||typeof players!=="object"||Array.isArray(players))throw Error("Backup inválido: players ausente.");const playerIds=Object.keys(players);if(playerIds.length>6)throw Error("Backup inválido: máximo de 6 jogadores excedido.");
+  const finiteNumber=(v:any,label:string)=>{if(typeof v!=="number"||!Number.isFinite(v))throw Error(`Backup inválido: ${label}.`);};const map=(value:any,label:string,max:number)=>{if(value===undefined)return{};if(!value||typeof value!=="object"||Array.isArray(value))throw Error(`Backup inválido: ${label}.`);if(Object.keys(value).length>max)throw Error(`Backup inválido: ${label} excede o limite.`);return value;};
+  if(s.hostId!==undefined&&typeof s.hostId!=="string")throw Error("Backup inválido: hostId.");for(const k of ["revision","housesRemaining","round","turnNumber","startedAt","durationMs","pausedAt","totalPausedMs"]){if(s[k]!==undefined)finiteNumber(s[k],k);}if(s.housesRemaining!==undefined&&(!Number.isInteger(s.housesRemaining)||s.housesRemaining<0||s.housesRemaining>HOUSE_STOCK))throw Error("Backup inválido: housesRemaining fora de 0..80.");if(s.turnOrder!==undefined&&(!Array.isArray(s.turnOrder)||s.turnOrder.length>6))throw Error("Backup inválido: turnOrder.");if(Array.isArray(s.events)&&s.events.length>5000)throw Error("Backup inválido: histórico excede o limite de importação.");if(s.events!==undefined&&!Array.isArray(s.events))throw Error("Backup inválido: events.");
+  for(const[id,p]of Object.entries<any>(players)){if(!p||typeof p!=="object"||Array.isArray(p))throw Error(`Jogador ${id} inválido.`);finiteNumber(p.balance,`saldo de ${id}`);if(!Array.isArray(p.assets)||p.assets.length>28)throw Error(`Patrimônio inválido para ${id}.`);const seen=new Set<string>();for(const a of p.assets){if(!a||typeof a!=="object"||Array.isArray(a))throw Error(`Patrimônio inválido para ${id}.`);const catalogId=String(a.catalogId||"");if(!catalogById.has(catalogId))throw Error(`Patrimônio desconhecido no catálogo atual: ${catalogId}.`);if(seen.has(catalogId))throw Error(`Patrimônio duplicado no mesmo jogador: ${catalogId}.`);seen.add(catalogId);if(typeof a.development!=="number"||!Number.isInteger(a.development)||a.development<0||a.development>5)throw Error(`development inválido em ${catalogId}.`);if(a.mortgaged!==undefined&&typeof a.mortgaged!=="boolean")throw Error(`Hipoteca inválida em ${catalogId}.`);}}
+  const pending=map(s.pending,"pending",200);for(const[id,x]of Object.entries<any>(pending)){if(!x||typeof x!=="object")throw Error(`Pending ${id} inválido.`);if(typeof x.fromId!=="string"||typeof x.toId!=="string")throw Error(`Pending ${id} possui jogadores inválidos.`);if(x.amount!==undefined)finiteNumber(x.amount,`valor de pending ${id}`);}
+  const debts=map(s.debts,"debts",200);for(const[id,x]of Object.entries<any>(debts)){if(!x||typeof x!=="object")throw Error(`Debt ${id} inválida.`);if(x.originalAmount!==undefined)finiteNumber(x.originalAmount,`dívida ${id}`);}
+  const trades=map(s.trades,"trades",200);for(const[id,x]of Object.entries<any>(trades)){if(!x||typeof x!=="object")throw Error(`Trade ${id} inválida.`);if(typeof x.proposerId!=="string"||typeof x.recipientId!=="string"||!Array.isArray(x.proposerAssetIds||[])||!Array.isArray(x.recipientAssetIds||[]))throw Error(`Trade ${id} malformada.`);for(const k of ["proposerCash","recipientCash","proposerHabeasCount","recipientHabeasCount"])if(x[k]!==undefined)finiteNumber(x[k],`${k} ${id}`);}
+  const liabilities=map(s.liabilities,"liabilities",300);for(const[id,x]of Object.entries<any>(liabilities)){if(!x||typeof x!=="object")throw Error(`Liability ${id} inválida.`);if(typeof x.debtorId!=="string")throw Error(`Liability ${id} sem devedor.`);if(x.amount!==undefined)finiteNumber(x.amount,`amount ${id}`);if(x.remaining!==undefined)finiteNumber(x.remaining,`remaining ${id}`);}
+  const settlements=map(s.settlements,"settlements",200);for(const[id,x]of Object.entries<any>(settlements)){if(!x||typeof x!=="object")throw Error(`Settlement ${id} inválido.`);if(!Array.isArray(x.assetIds||[]))throw Error(`Settlement ${id} assetIds inválido.`);if(x.cash!==undefined)finiteNumber(x.cash,`cash ${id}`);}
+  for(const[index,e]of(s.events||[]).entries()){if(!e||typeof e!=="object")throw Error(`Evento ${index} inválido.`);if(e.seq!==undefined)finiteNumber(e.seq,`seq do evento ${index}`);if(e.at!==undefined)finiteNumber(e.at,`at do evento ${index}`);if(String(e.message||"").length>2000)throw Error(`Evento ${index} excede o tamanho permitido.`);}
 }
-
-export const code = () => crypto.randomBytes(4).toString("hex").toUpperCase();
-
-export const hash = (value: string) =>
-  crypto.createHash("sha256").update(value).digest("hex");
-
-const clean = (value: string) => value.replace(/[^A-Z0-9-]/gi, "");
-
-const file = (saveCode: string) => path.join(rooms, `${clean(saveCode)}.json`);
-
-export function serialize(state: State, pinHash: string) {
-  return {
-    format: "BancoMundoSave",
-    version: "0.5.3",
-    savedAt: new Date().toISOString(),
-    pinHash,
-    state: JSON.parse(JSON.stringify(state)),
-  };
-}
-
-export function atomicSave(state: State, pinHash: string) {
-  state.lastSavedAt = Date.now();
-
-  const serialized = serialize(state, pinHash);
-
-  const output = JSON.stringify(serialized, null, 2);
-
-  const target = file(state.saveCode);
-
-  const temporary = `${target}.tmp`;
-
-  if (fs.existsSync(target)) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-
-    fs.copyFileSync(
-      target,
-      path.join(backups, `${clean(state.saveCode)}-${stamp}.json`),
-    );
-
-    const roomBackups = fs
-      .readdirSync(backups)
-      .filter((name) => name.startsWith(`${clean(state.saveCode)}-`))
-      .sort()
-      .reverse();
-
-    for (const oldBackup of roomBackups.slice(10)) {
-      fs.rmSync(path.join(backups, oldBackup));
-    }
-  }
-
-  fs.writeFileSync(temporary, output, "utf8");
-
-  fs.renameSync(temporary, target);
-
-  const gameStatus = state.ended ? "ended" : state.paused ? "paused" : "active";
-
-  void saveRoomToDatabase(
-    state.saveCode,
-    state.roomName,
-    serialized.state,
-    pinHash,
-    gameStatus,
-  ).catch((error) => {
-    console.error("Falha ao salvar a partida no PostgreSQL:", error);
-  });
-}
-
-export function loadSave(saveCode: string) {
-  const target = file(saveCode);
-
-  if (!fs.existsSync(target)) {
-    throw Error("Partida salva não encontrada.");
-  }
-
-  try {
-    const content = fs.readFileSync(target, "utf8");
-
-    const save = JSON.parse(content);
-
-    if (save.format !== "BancoMundoSave" || !save.state?.players) {
-      throw Error("Formato inválido.");
-    }
-
-    return save;
-  } catch {
-    const isolatedFile = path.join(
-      corrupt,
-      `${path.basename(target)}-${Date.now()}`,
-    );
-
-    fs.copyFileSync(target, isolatedFile);
-
-    throw Error("O salvamento está corrompido. Uma cópia foi isolada.");
-  }
-}
-
-export async function loadSaveWithFallback(saveCode: string) {
-  try {
-    const databaseSave = await loadRoomFromDatabase(saveCode);
-
-    if (databaseSave) {
-      return databaseSave;
-    }
-  } catch (error) {
-    console.error("Falha ao carregar a partida do PostgreSQL:", error);
-  }
-
-  return loadSave(saveCode);
-}
-
-export function restore(raw: any) {
-  const state = new State();
-
-  const savedState = raw.state;
-
-  state.saveCode = savedState.saveCode;
-
-  state.hostId = savedState.hostId;
-
-  state.roomName = savedState.roomName;
-
-  state.locked = Boolean(savedState.locked);
-
-  state.ended = Boolean(savedState.ended);
-
-  state.paused = false;
-
-  state.maxPlayers = savedState.maxPlayers || 6;
-
-  state.seq = savedState.seq || 0;
-
-  state.lastSavedAt = savedState.lastSavedAt || 0;
-
-  for (const [playerId, playerData] of Object.entries<any>(
-    savedState.players || {},
-  )) {
-    const player = new Player();
-
-    Object.assign(player, {
-      id: playerData.id || playerId,
-
-      deviceToken: playerData.deviceToken || "",
-
-      recoveryCode: playerData.recoveryCode || "",
-
-      name: playerData.name || "Jogador",
-
-      balance: Number(playerData.balance) || 0,
-
-      connected: false,
-
-      sent: Number(playerData.sent) || 0,
-
-      received: Number(playerData.received) || 0,
-
-      bankOps: Number(playerData.bankOps) || 0,
-      bankrupt: Boolean(playerData.bankrupt),
-      bankruptcyBackup: String(playerData.bankruptcyBackup || ""),
-    });
-
-    for (const assetData of playerData.assets || []) {
-      const asset = new Asset();
-
-      Object.assign(asset, {
-        id: assetData.id || code(),
-
-        catalogId: assetData.catalogId || "",
-
-        kind: assetData.kind || "",
-
-        name: assetData.name || "Patrimônio",
-
-        development: Math.max(
-          0,
-          Math.min(5, Number(assetData.development) || 0),
-        ),
-
-        mortgaged: Boolean(assetData.mortgaged),
-
-        purchase: Math.max(0, Number(assetData.purchase) || 0),
-
-        mortgage: Math.max(0, Number(assetData.mortgage) || 0),
-
-        houseCost: Math.max(0, Number(assetData.houseCost) || 0),
-
-        condominiumCost: Math.max(0, Number(assetData.condominiumCost) || 0),
-      });
-
-      player.assets.push(asset);
-    }
-
-    state.players.set(playerId, player);
-  }
-
-  for (const [requestId, requestData] of Object.entries<any>(
-    savedState.pending || {},
-  )) {
-    const request = new Pending();
-
-    Object.assign(request, requestData);
-
-    request.id = requestData.id || requestId;
-
-    request.amount = Number(requestData.amount) || 0;
-
-    request.development = Math.max(
-      0,
-      Math.min(5, Number(requestData.development) || 0),
-    );
-
-    request.purchase = Math.max(0, Number(requestData.purchase) || 0);
-
-    request.houseCost = Math.max(0, Number(requestData.houseCost) || 0);
-
-    request.condominiumCost = Math.max(
-      0,
-      Number(requestData.condominiumCost) || 0,
-    );
-
-    request.mortgageValue = Math.max(0, Number(requestData.mortgageValue) || 0);
-
-    state.pending.set(requestId, request);
-  }
-
-  for (const [agreementId, agreementData] of Object.entries<any>(
-    savedState.debts || {},
-  )) {
-    const agreement = new Debt();
-
-    Object.assign(agreement, {
-      id: agreementData.id || agreementId,
-
-      debtorId: agreementData.debtorId || "",
-
-      debtorName: agreementData.debtorName || "",
-
-      creditorId: agreementData.creditorId || "",
-
-      creditorName: agreementData.creditorName || "",
-
-      originalAmount: Math.max(0, Number(agreementData.originalAmount) || 0),
-
-      cashOffered: Math.max(0, Number(agreementData.cashOffered) || 0),
-
-      note: agreementData.note || "",
-
-      at: Number(agreementData.at) || 0,
-    });
-
-    for (const assetId of agreementData.assetIds || []) {
-      agreement.assetIds.push(String(assetId));
-    }
-
-    state.debts.set(agreementId, agreement);
-  }
-
-  for (const eventData of savedState.events || []) {
-    const event = new Event();
-
-    Object.assign(event, eventData);
-
-    event.seq = Number(eventData.seq) || 0;
-
-    event.at = Number(eventData.at) || 0;
-
-    state.events.push(event);
-  }
-
-  return state;
-}
-
-export function listSaves() {
-  return fs
-    .readdirSync(rooms)
-    .filter((name) => name.endsWith(".json"))
-    .map((name) => {
-      try {
-        const content = fs.readFileSync(path.join(rooms, name), "utf8");
-
-        const save = JSON.parse(content);
-
-        return {
-          saveCode: save.state.saveCode,
-
-          roomName: save.state.roomName,
-
-          players: Object.keys(save.state.players || {}).length,
-
-          lastSavedAt: save.state.lastSavedAt,
-
-          paused: Boolean(save.state.paused),
-
-          ended: Boolean(save.state.ended),
-        };
-      } catch {
-        return null;
-      }
-    })
-    .filter((save): save is NonNullable<typeof save> => Boolean(save));
-}
-
-export async function importSave(raw: any) {
-  if (raw?.format !== "BancoMundoSave" || !raw.state?.players) throw Error("Backup inválido.");
-  raw.version = "0.5.3";
-  raw.state.saveCode = code();
-  raw.state.paused = true;
-  raw.state.ended = false;
-  raw.state.locked = false;
-  raw.state.lastSavedAt = Date.now();
-  const target = file(raw.state.saveCode);
-  fs.writeFileSync(target, JSON.stringify(raw, null, 2), "utf8");
-  await saveRoomToDatabase(raw.state.saveCode, raw.state.roomName || "Partida Banco Mundo", raw.state, raw.pinHash || "", "paused");
-  return raw.state.saveCode;
-}
-
-export function getSavePath(saveCode: string) {
-  return file(saveCode);
-}
+function rawUsedHouses(s:any,rules:any){let used=0;for(const p of Object.values<any>(s.players||{}))for(const a of p.assets||[])if(catalogById.has(a.catalogId)&&isProperty(catalogById.get(a.catalogId)!))used+=housePiecesForDevelopment(Number(a.development)||0,rules.housesBeforeCondo);return used;}
+
+export function migrateSave(input:any){const raw=structuredClone(input);validateBackupShape(raw);const sourceVersion=Number(raw.version)||1;raw.version=SAVE_FORMAT_VERSION;raw.appVersion=APP_VERSION;raw.privateData=raw.privateData&&typeof raw.privateData==="object"?raw.privateData:{};const s=raw.state;s.mode="assisted";s.revision=finite(s.revision,0);s.gamePhase=s.gamePhase||"LOBBY";s.turnOrder=Array.isArray(s.turnOrder)?s.turnOrder:[];s.currentPlayerId=String(s.currentPlayerId||"");s.round=Math.max(0,finite(s.round,0));s.turnNumber=Math.max(0,finite(s.turnNumber,0));s.requiredAction=String(s.requiredAction||"");s.requiredActionPlayerId=String(s.requiredActionPlayerId||"");s.requiredLiabilityId=String(s.requiredLiabilityId||"");s.startedAt=Math.max(0,finite(s.startedAt,0));s.durationMs=Math.max(0,finite(s.durationMs,0));s.pausedAt=Math.max(0,finite(s.pausedAt,0));s.totalPausedMs=Math.max(0,finite(s.totalPausedMs,0));s.gameFinishedAt=Math.max(0,finite(s.gameFinishedAt,0));s.houseAuctionAvailable=Boolean(s.houseAuctionAvailable);s.houseAuctionId=String(s.houseAuctionId||"");s.houseAuctionStatus=String(s.houseAuctionStatus||"");s.houseAuctionBid=Math.max(0,finite(s.houseAuctionBid,0));s.houseAuctionBidderId=String(s.houseAuctionBidderId||"");s.houseAuctionAssetId=String(s.houseAuctionAssetId||"");s.rules=normalizeRules(s.rules,sourceVersion<3?"legacy":s.rules?.preset);s.gameStarted=Boolean(s.gameStarted);s.rulesLocked=Boolean(s.rulesLocked||s.gameStarted);s.trades=s.trades&&typeof s.trades==="object"?s.trades:{};s.liabilities=s.liabilities&&typeof s.liabilities==="object"?s.liabilities:{};s.settlements=s.settlements&&typeof s.settlements==="object"?s.settlements:{};
+  for(const[id,p]of Object.entries<any>(s.players)){p.id=p.id||id;raw.privateData[id]||={};if(p.deviceToken&&!raw.privateData[id].deviceTokenHash)raw.privateData[id].deviceTokenHash=hashToken(String(p.deviceToken));if(p.recoveryCode&&!raw.privateData[id].recoveryTokenHash)raw.privateData[id].recoveryTokenHash=hashToken(String(p.recoveryCode));if(p.bankruptcyBackup&&!raw.privateData[id].bankruptcyBackup)raw.privateData[id].bankruptcyBackup=String(p.bankruptcyBackup);delete p.deviceToken;delete p.recoveryCode;delete p.bankruptcyBackup;p.spectator=Boolean(p.spectator||p.bankrupt);p.abandoned=Boolean(p.abandoned);p.boardPosition=finite(p.boardPosition,0);p.jailed=Boolean(p.jailed);p.jailVisiting=Boolean(p.jailVisiting);p.jailAttempts=Math.max(0,finite(p.jailAttempts,0));p.habeasCorpus=Math.max(0,finite(p.habeasCorpus,0));p.startBonusAvailable=Boolean(p.startBonusAvailable);p.stats=p.stats&&typeof p.stats==="object"?p.stats:{};}
+  for(const t of Object.values<any>(s.trades)){t.proposerHabeasCount=Math.max(0,finite(t.proposerHabeasCount,0));t.recipientHabeasCount=Math.max(0,finite(t.recipientHabeasCount,0));}
+  for(const l of Object.values<any>(s.liabilities))l.sourceCode=String(l.sourceCode||"MANUAL");
+  const derived=Math.max(0,HOUSE_STOCK-rawUsedHouses(s,s.rules)),stored=Number(s.housesRemaining);if(sourceVersion<3||!Number.isFinite(stored))s.housesRemaining=derived;else s.housesRemaining=stored;if(sourceVersion<4)raw.migrationNotice="Save migrado para 0.9.0 preservando Ruleset personalizado; novos campos assistidos receberam defaults compatíveis.";return raw;}
+
+function applyRules(target:GameRules,data:any){Object.assign(target,normalizeRules(data,data?.preset));}
+function restoreStats(data:any){const s=new PlayerStats();for(const k of ["rentPaid","rentReceived","propertiesPurchased","housesBuilt","housesSold","mortgagesCreated","tradesCompleted","turnsPlayed","jailTurns","obligationsCreated","settlementsCompleted"] as const)(s as any)[k]=Math.max(0,finite(data?.[k],0));return s;}
+function canonicalAsset(raw:any){const item=catalogById.get(String(raw.catalogId||""));if(!item)throw Error(`Patrimônio desconhecido no catálogo atual: ${String(raw.catalogId||"")}.`);const a=new Asset();a.id=String(raw.id||crypto.randomUUID());a.catalogId=item.id;a.kind=isProperty(item)?"property":"organization";a.name=item.name;a.development=isProperty(item)?bounded(raw.development,0,5,0):0;a.mortgaged=Boolean(raw.mortgaged);a.purchase=item.purchase;a.mortgage=item.mortgage;a.houseCost=isProperty(item)?item.houseCost:0;a.condominiumCost=isProperty(item)?item.condominiumCost:0;return a;}
+
+export function restore(input:any){const raw=migrateSave(input),s=raw.state,state=new State();Object.assign(state,{saveCode:String(s.saveCode||""),hostId:String(s.hostId||""),roomName:String(s.roomName||"Partida Banco Mundo").slice(0,50),mode:"assisted",locked:Boolean(s.locked),ended:Boolean(s.ended),paused:Boolean(s.paused),gameStarted:Boolean(s.gameStarted),rulesLocked:Boolean(s.rulesLocked),maxPlayers:Math.min(6,Math.max(2,finite(s.maxPlayers,6))),seq:Math.max(0,finite(s.seq,0)),lastSavedAt:Math.max(0,finite(s.lastSavedAt,0)),revision:Math.max(0,finite(s.revision,0)),housesRemaining:finite(s.housesRemaining,HOUSE_STOCK),gamePhase:String(s.gamePhase||"LOBBY"),currentPlayerId:String(s.currentPlayerId||""),round:Math.max(0,finite(s.round,0)),turnNumber:Math.max(0,finite(s.turnNumber,0)),die1:bounded(s.die1,0,6,0),die2:bounded(s.die2,0,6,0),consecutiveDoubles:bounded(s.consecutiveDoubles,0,2,0),requiredAction:String(s.requiredAction||""),requiredActionPlayerId:String(s.requiredActionPlayerId||""),requiredLiabilityId:String(s.requiredLiabilityId||""),winnerId:String(s.winnerId||""),startedAt:Math.max(0,finite(s.startedAt,0)),durationMs:Math.max(0,finite(s.durationMs,0)),pausedAt:Math.max(0,finite(s.pausedAt,0)),totalPausedMs:Math.max(0,finite(s.totalPausedMs,0)),gameFinishedAt:Math.max(0,finite(s.gameFinishedAt,0)),houseAuctionAvailable:Boolean(s.houseAuctionAvailable),houseAuctionId:String(s.houseAuctionId||""),houseAuctionStatus:String(s.houseAuctionStatus||""),houseAuctionBid:Math.max(0,finite(s.houseAuctionBid,0)),houseAuctionBidderId:String(s.houseAuctionBidderId||""),houseAuctionAssetId:String(s.houseAuctionAssetId||"")});applyRules(state.rules,s.rules);state.rulesSnapshot=JSON.stringify(normalizeRules(s.rules,s.rules?.preset));for(const id of s.turnOrder||[])state.turnOrder.push(String(id));const catalogOwners=new Set<string>();
+  for(const[playerId,pd]of Object.entries<any>(s.players||{})){const p=new Player();Object.assign(p,{id:String(pd.id||playerId),name:String(pd.name||"Jogador").slice(0,24),balance:finite(pd.balance,0),connected:false,abandoned:Boolean(pd.abandoned),sent:Math.max(0,finite(pd.sent,0)),received:Math.max(0,finite(pd.received,0)),bankOps:Math.max(0,finite(pd.bankOps,0)),bankrupt:Boolean(pd.bankrupt),spectator:Boolean(pd.spectator||pd.bankrupt),boardPosition:Math.max(0,finite(pd.boardPosition,0)),jailed:Boolean(pd.jailed),jailVisiting:Boolean(pd.jailVisiting),jailAttempts:Math.max(0,finite(pd.jailAttempts,0)),habeasCorpus:Math.max(0,finite(pd.habeasCorpus,0)),startBonusAvailable:Boolean(pd.startBonusAvailable)});p.stats=restoreStats(pd.stats);const priv=raw.privateData?.[playerId]||raw.privateData?.[p.id]||{};p.deviceTokenHash=String(priv.deviceTokenHash||"");p.recoveryTokenHash=String(priv.recoveryTokenHash||"");p.bankruptcyBackup=String(priv.bankruptcyBackup||"");for(const ad of pd.assets||[]){const a=canonicalAsset(ad);if(catalogOwners.has(a.catalogId))throw Error(`A mesma propriedade aparece com mais de um proprietário: ${a.catalogId}.`);catalogOwners.add(a.catalogId);p.assets.push(a);}state.players.set(p.id,p);}
+  for(const[id,rd]of Object.entries<any>(s.pending||{})){const r=new Pending();Object.assign(r,{id:String(rd.id||id),kind:String(rd.kind||""),fromId:String(rd.fromId||""),fromName:String(rd.fromName||""),toId:String(rd.toId||""),toName:String(rd.toName||""),amount:finite(rd.amount,0),catalogId:String(rd.catalogId||""),name:String(rd.name||""),development:0,mortgaged:false,purchase:finite(rd.purchase,0),houseCost:0,condominiumCost:0,mortgageValue:finite(rd.mortgageValue,0),reason:String(rd.reason||""),at:finite(rd.at,0)});state.pending.set(r.id,r);}
+  for(const[id,dd]of Object.entries<any>(s.debts||{})){const d=new Debt();Object.assign(d,{id:String(dd.id||id),debtorId:String(dd.debtorId||""),debtorName:String(dd.debtorName||""),creditorId:String(dd.creditorId||""),creditorName:String(dd.creditorName||""),originalAmount:Math.max(0,finite(dd.originalAmount,0)),cashOffered:Math.max(0,finite(dd.cashOffered,0)),note:String(dd.note||""),at:finite(dd.at,0)});for(const aid of dd.assetIds||[])d.assetIds.push(String(aid));state.debts.set(d.id,d);}
+  for(const[id,td]of Object.entries<any>(s.trades||{})){const x=new Trade();Object.assign(x,{id:String(td.id||id),proposerId:String(td.proposerId||""),recipientId:String(td.recipientId||""),proposerCash:Math.max(0,finite(td.proposerCash,0)),recipientCash:Math.max(0,finite(td.recipientCash,0)),proposerHabeasCount:Math.max(0,finite(td.proposerHabeasCount,0)),recipientHabeasCount:Math.max(0,finite(td.recipientHabeasCount,0)),status:String(td.status||"pending"),createdAt:finite(td.createdAt,0),revision:Math.max(0,finite(td.revision,0))});for(const a of td.proposerAssetIds||[])x.proposerAssetIds.push(String(a));for(const a of td.recipientAssetIds||[])x.recipientAssetIds.push(String(a));state.trades.set(x.id,x);}
+  for(const[id,ld]of Object.entries<any>(s.liabilities||{})){const x=new Liability();Object.assign(x,{id:String(ld.id||id),debtorId:String(ld.debtorId||""),creditorType:ld.creditorType==="PLAYER"?"PLAYER":"BANK",creditorPlayerId:String(ld.creditorPlayerId||""),amount:Math.max(0,finite(ld.amount,0)),remaining:Math.max(0,finite(ld.remaining,0)),reason:String(ld.reason||""),sourceCode:String(ld.sourceCode||"MANUAL"),sourceEventId:String(ld.sourceEventId||""),status:String(ld.status||"open"),createdAt:finite(ld.createdAt,0)});state.liabilities.set(x.id,x);}
+  for(const[id,sd]of Object.entries<any>(s.settlements||{})){const x=new Settlement();Object.assign(x,{id:String(sd.id||id),liabilityId:String(sd.liabilityId||""),debtorId:String(sd.debtorId||""),creditorPlayerId:String(sd.creditorPlayerId||""),cash:Math.max(0,finite(sd.cash,0)),note:String(sd.note||""),status:String(sd.status||"pending"),createdAt:finite(sd.createdAt,0)});for(const a of sd.assetIds||[])x.assetIds.push(String(a));state.settlements.set(x.id,x);}
+  for(const ed of(s.events||[]).slice(-250)){const e=new Event();Object.assign(e,{id:String(ed.id||crypto.randomUUID()),seq:Math.max(0,finite(ed.seq,0)),code:String(ed.code||ed.category||"LEGACY_EVENT"),type:String(ed.type||ed.code||"legacy"),category:String(ed.category||"legacy"),actorId:String(ed.actorId||""),actor:String(ed.actor||""),targetPlayerId:String(ed.targetPlayerId||""),catalogId:String(ed.catalogId||""),amount:finite(ed.amount,0),metadata:typeof ed.metadata==="string"?ed.metadata:"",message:String(ed.message||"").slice(0,1000),at:finite(ed.at,0)});state.events.push(e);}
+  if(Number(raw.version)>=3&&state.rules.limitedHouseStock&&state.housesRemaining!==calculateHousesRemaining(state))throw Error("Estoque de casas incompatível com as construções do save.");if(Number(input?.version)<3)state.housesRemaining=calculateHousesRemaining(state);validateGameInvariants(state);return state;}
+
+export async function loadSave(saveCode:string){const target=file(saveCode);try{return migrateSave(JSON.parse(await fs.readFile(target,"utf8")));}catch(e){if(!(await exists(target)))throw Error("Partida salva não encontrada.");const isolated=path.join(corrupt,`${path.basename(target)}-${Date.now()}`);await fs.copyFile(target,isolated);throw Error(`O salvamento está corrompido ou inválido. Uma cópia foi isolada. ${(e as Error).message}`);}}
+export async function loadSaveWithFallback(saveCode:string){if(databaseEnabled){let remote:any;try{remote=await loadRoomFromDatabase(saveCode);}catch(e){throw Error(`PostgreSQL é a autoridade configurada e não pôde ser consultado: ${(e as Error).message}`);}if(remote)return migrateSave(remote);try{return await loadSave(saveCode);}catch{throw Error("Partida salva não encontrada no PostgreSQL nem no mirror local.");}}return loadSave(saveCode);}
+export function sanitizeForExport(raw:any){const migrated=migrateSave(raw);delete migrated.privateData;delete migrated.pinHash;for(const p of Object.values<any>(migrated.state.players||{})){delete p.deviceToken;delete p.recoveryCode;delete p.deviceTokenHash;delete p.recoveryTokenHash;delete p.bankruptcyBackup;}return migrated;}
+export async function exportBackup(saveCode:string,pin:string){const raw=await loadSaveWithFallback(saveCode);const stored=String(raw.pinHash||"");if(stored&&(!pin||!await verifyPin(pin,stored)))throw Error("Não autorizado.");return sanitizeForExport(raw);}
+export async function importSave(input:any,newPin:string){const size=Buffer.byteLength(JSON.stringify(input||{}));if(size>2_000_000)throw Error("Backup excede 2 MB.");checkKeys(input,["format","version","appVersion","savedAt","pinHash","privateData","state","migrationNotice"],"Backup");const state=restore(input),pinHash=newPin?await hashPin(newPin):"";state.saveCode=code();state.mode="assisted";state.paused=true;state.ended=false;state.locked=false;state.lastSavedAt=0;state.revision=0;const recoveryProfiles:any[]=[];for(const[id,p]of state.players){const token=crypto.randomBytes(32).toString("base64url");p.deviceTokenHash="";p.recoveryTokenHash=hashToken(token);p.bankruptcyBackup="";recoveryProfiles.push({playerId:id,name:p.name,recoveryToken:token});}await atomicSave(state,pinHash);return{saveCode:state.saveCode,recoveryProfiles};}
+export function getSavePath(saveCode:string){return file(saveCode);}

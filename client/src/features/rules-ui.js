@@ -1,0 +1,7 @@
+import { escapeHtml as esc } from "../ui/safe.js";
+import { collectRules, isOfficialRules, rulesSummary, synchronizedRules } from "./ruleset.js";
+
+
+export function renderRoomRules({room,$}){const target=$("#roomRulesSummary"),rules=synchronizedRules(room);if(!target||!rules)return;target.innerHTML=`<div class="rules-list">${rulesSummary(rules).map(([k,v])=>`<div><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join("")}</div>`;$("#houseRulesBadge")?.classList.toggle("hidden",isOfficialRules(rules));}
+export function ruleReview($){const rules=collectRules(document),box=$("#rulesReview");if(!box)return;box.innerHTML=`<strong>Preset: ${rules.preset==="official"?"Regras oficiais":"Personalizado • 🏠 regras da casa"}</strong><div class="rules-list">${rulesSummary(rules).map(([k,v])=>`<div><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join("")}</div>`;}
+export function openCreateReview({$,validateConnectionForm}){if(!validateConnectionForm(true))return;const rules=collectRules(document),content=$("#createReviewContent");if(content)content.innerHTML=`<div class="rules-list"><div><span>Nome</span><strong>${esc($("#name")?.value||"Jogador")}</strong></div><div><span>Modo</span><strong>Assistido</strong></div><div><span>Preset</span><strong>${rules.preset==="official"?"Regras oficiais":"Personalizado • regras da casa"}</strong></div>${rulesSummary(rules).map(([k,v])=>`<div><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join("")}</div>`;$("#createReviewModal")?.classList.remove("hidden");}

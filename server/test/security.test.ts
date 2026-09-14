@@ -1,0 +1,6 @@
+import test from "node:test";import assert from "node:assert/strict";
+import { hashPin,hashToken,safeEqualHash,secureToken,verifyPin,validatePin } from "../src/domain/security.ts";
+import { escapeHtml,setText } from "../../client/src/ui/safe.js";
+test("recovery token é forte e comparado por hash",()=>{const token=secureToken();assert.ok(token.length>=40);const h=hashToken(token);assert.ok(safeEqualHash(h,hashToken(token)));assert.equal(safeEqualHash(h,hashToken(token+"x")),false);});
+test("PIN usa scrypt com salt e valida limites",async()=>{const h1=await hashPin("1234"),h2=await hashPin("1234");assert.match(h1,/^scrypt\$/);assert.notEqual(h1,h2);assert.equal(await verifyPin("1234",h1),true);assert.equal(await verifyPin("9999",h1),false);assert.throws(()=>validatePin("123"),/4 e 32/);assert.throws(()=>validatePin("x".repeat(33)),/4 e 32/);});
+test("renderização de texto hostil é comportamentalmente inerte",()=>{for(const payload of ['<script>globalThis.xss=true</script>','<img src=x onerror="globalThis.xss=true">','"><svg onload=globalThis.xss=true>']){const el:any={textContent:""};setText(el,payload);assert.equal(el.textContent,payload);assert.equal((globalThis as any).xss,undefined);const html=escapeHtml(payload);assert.equal(html.includes('<script>'),false);assert.equal(html.includes('<img'),false);assert.equal(html.includes('<svg'),false);}});

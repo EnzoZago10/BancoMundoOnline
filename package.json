@@ -1,0 +1,23 @@
+{
+  "name": "banco-mundo-online",
+  "version": "0.9.2",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "build": "npm run build -w server && npm run build -w client",
+    "typecheck": "npm run typecheck -w server",
+    "test": "npm run test -w server",
+    "migrate": "npm run migrate -w server",
+    "dev:server": "npm run start -w server",
+    "dev:client": "npm run dev -w client",
+    "lint": "npm run typecheck -w server && node scripts/check-client.mjs",
+    "test:integration": "npm run test:integration -w server",
+    "test:e2e": "playwright test -c client/playwright.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.0"
+  }
+}
