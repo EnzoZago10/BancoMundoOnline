@@ -1,4 +1,4 @@
-﻿node_modules/
+node_modules/
 client/node_modules/
 server/node_modules/
 client/dist/
@@ -12,7 +12,6 @@ server/data/
 *.jks
 *.keystore
 *.apk
-
 # Build e testes gerados localmente
 server/dist/
 playwright-report/

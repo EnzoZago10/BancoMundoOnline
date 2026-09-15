@@ -126,6 +126,12 @@ Compras de títulos também usam `pending`: o jogador envia apenas o `catalogId`
 
 O pró-labore do Início segue o mesmo padrão de transparência: o jogador solicita o valor definido pelo Ruleset e o ADM aprova ou recusa, sem depender do turn tracker.
 
+### Disposição de patrimônio
+
+A venda voluntária ao banco usa `pending` com `kind="bank_sale"`. O cliente envia apenas o identificador do título; o servidor resolve o valor canônico, valida o estado na criação e revalida na aprovação do ADM. A conclusão remove o asset do jogador, credita o valor oficial e torna o `catalogId` novamente sem proprietário.
+
+A ação simplificada **Transferir** não possui motor próprio. Ela cria um `Trade` normal com um título do proponente e dinheiro zero. O destinatário aceita/recusa pelo mesmo fluxo de negociação; o proponente pode cancelar. Ownership, hipoteca, construções, conflitos e invariants são revalidados antes do commit.
+
 ## Pagamentos obrigatórios
 
 `GameEngine.resolveMandatoryPayment()` é o caminho canônico para obrigações como aluguel e outras consequências financeiras.
@@ -234,7 +240,7 @@ A listagem pública de saves é desativada.
 
 ## PWA
 
-A PWA vive no cliente e fornece instalação, cache do shell e fluxo de atualização. Operações de jogo continuam dependendo do servidor; o cache não cria uma autoridade paralela offline.
+A PWA vive no cliente e fornece instalação progressiva, cache do shell e fluxo de atualização. O estado de instalação é derivado de `display-mode: standalone`/`navigator.standalone` e da disponibilidade real de `beforeinstallprompt`; ausência do evento usa orientação manual em vez de botão morto. Instalação e atualização do Service Worker são estados independentes, e o primeiro `clients.claim()` continua sem recarregar uma sala recém-criada. Operações de jogo continuam dependendo do servidor; o cache não cria uma autoridade paralela offline.
 
 ## Testes e CI
 

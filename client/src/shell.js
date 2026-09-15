@@ -1,8 +1,49 @@
 export function initShellFeatures({ toast, clearFieldError }) {
   let deferredInstallPrompt = null;
   let waitingServiceWorker = null;
+  let installedThisSession = false;
   const hadServiceWorkerControllerAtLoad = Boolean(navigator.serviceWorker?.controller);
   let updateActivationRequested = false;
+  const installButton = document.querySelector("#installApp");
+  const installModal = document.querySelector("#installHelpModal");
+  const installContent = document.querySelector("#installHelpContent");
+  const displayModeQuery = window.matchMedia?.("(display-mode: standalone)");
+
+  function isStandalone() {
+    return Boolean(installedThisSession || displayModeQuery?.matches || navigator.standalone === true);
+  }
+  function compactInstallLabel() {
+    return window.matchMedia?.("(max-width: 480px)")?.matches ? "📲 Instalar" : "Instalar aplicativo";
+  }
+  function updateInstallUI() {
+    const installed = isStandalone();
+    installButton?.classList.toggle("hidden", installed);
+    if (installButton) {
+      installButton.textContent = compactInstallLabel();
+      installButton.setAttribute("aria-hidden", String(installed));
+    }
+    document.documentElement.dataset.installed = installed ? "true" : "false";
+    if (installed) installModal?.classList.add("hidden");
+  }
+  function platformKind() {
+    const nav = navigator;
+    const platform = String(nav.userAgentData?.platform || nav.platform || "");
+    const ua = String(nav.userAgent || "");
+    const ios = /iPhone|iPad|iPod/i.test(ua) || (platform === "MacIntel" && Number(nav.maxTouchPoints || 0) > 1);
+    if (ios) return "ios";
+    if (/Android/i.test(platform) || /Android/i.test(ua)) return "android";
+    return "generic";
+  }
+  function showInstallHelp() {
+    if (!installContent || !installModal) return;
+    const kind = platformKind();
+    installContent.innerHTML = kind === "ios"
+      ? '<ol class="install-steps"><li>Toque em <strong>Compartilhar</strong>.</li><li>Escolha <strong>Adicionar à Tela de Início</strong>.</li><li>Confirme em <strong>Adicionar</strong>.</li></ol>'
+      : kind === "android"
+        ? '<p>Abra o menu do navegador (<strong>⋮</strong>) e escolha <strong>Instalar aplicativo</strong> ou <strong>Adicionar à tela inicial</strong>. O nome pode variar conforme o navegador.</p>'
+        : '<p>Abra o menu do navegador e procure <strong>Instalar aplicativo</strong> ou <strong>Adicionar à tela inicial</strong>.</p>';
+    installModal.classList.remove("hidden");
+  }
 
   function updateConnectionUI() {
     const offline = !navigator.onLine;
@@ -13,24 +54,41 @@ export function initShellFeatures({ toast, clearFieldError }) {
   window.addEventListener("online", () => { updateConnectionUI(); toast("Conexão restaurada."); });
   window.addEventListener("offline", updateConnectionUI);
   updateConnectionUI();
+  updateInstallUI();
+  displayModeQuery?.addEventListener?.("change", updateInstallUI);
+  window.addEventListener("pageshow", updateInstallUI);
+  window.addEventListener("resize", updateInstallUI);
 
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();
     deferredInstallPrompt = event;
-    document.querySelector("#installApp")?.classList.remove("hidden");
+    updateInstallUI();
   });
   window.addEventListener("appinstalled", () => {
+    installedThisSession = true;
     deferredInstallPrompt = null;
-    document.querySelector("#installApp")?.classList.add("hidden");
-    toast("Banco Mundo instalado.");
+    updateInstallUI();
+    toast("Banco Mundo instalado com sucesso.");
   });
-  document.querySelector("#installApp")?.addEventListener("click", async () => {
-    if (!deferredInstallPrompt) return toast("Use 'Adicionar à tela inicial' no menu do navegador.");
-    deferredInstallPrompt.prompt();
-    await deferredInstallPrompt.userChoice;
-    deferredInstallPrompt = null;
-    document.querySelector("#installApp")?.classList.add("hidden");
+  installButton?.addEventListener("click", async () => {
+    if (isStandalone()) return updateInstallUI();
+    if (!deferredInstallPrompt) return showInstallHelp();
+    try {
+      await deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      if (choice?.outcome === "accepted") toast("Instalação solicitada ao navegador.", "info");
+      updateInstallUI();
+    } catch {
+      deferredInstallPrompt = null;
+      showInstallHelp();
+    }
   });
+  const closeInstallHelp = () => installModal?.classList.add("hidden");
+  document.querySelector("#installHelpClose")?.addEventListener("click", closeInstallHelp);
+  document.querySelector("#installHelpDone")?.addEventListener("click", closeInstallHelp);
+  installModal?.addEventListener("keydown", (event) => { if (event.key === "Escape") closeInstallHelp(); });
+
   document.querySelector("#updateApp")?.addEventListener("click", () => {
     if (waitingServiceWorker) {
       updateActivationRequested = true;
@@ -66,7 +124,7 @@ export function initShellFeatures({ toast, clearFieldError }) {
   document.addEventListener("click", (event) => {
     if (navigator.onLine) return;
     const button = event.target.closest("button");
-    if (!button || button.matches(".tab, #theme, #installApp, #updateApp")) return;
+    if (!button || button.matches(".tab, #theme, #installApp, #updateApp, #installHelpClose, #installHelpDone") || button.closest("#installHelpModal")) return;
     event.preventDefault(); event.stopImmediatePropagation();
     toast("Operação indisponível sem conexão com o servidor.");
   }, true);

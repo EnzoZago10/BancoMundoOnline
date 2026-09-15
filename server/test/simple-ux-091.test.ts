@@ -66,3 +66,19 @@ test("0.9.2 mantém confirmação de transferência e banco contextual", () => {
   assert.match(html, /Resolver dívida com o banco/);
   assert.match(simpleUx, /start_bonus/);
 });
+
+test("0.9.3 mantém patrimônio contextual e instalação PWA encontrável",()=>{const assets=fs.readFileSync(path.join(clientRoot,"src/features/assets.js"),"utf8"),shell=fs.readFileSync(path.join(clientRoot,"src/shell.js"),"utf8");assert.match(assets,/Vender ao banco/);assert.match(assets,/Transferir/);assert.match(assets,/Resgatar hipoteca/);assert.match(html,/id="assetSellModal"/);assert.match(html,/id="assetTransferModal"/);assert.match(html,/id="installHelpModal"/);assert.match(shell,/beforeinstallprompt/);assert.match(shell,/Adicionar à Tela de Início/);});
+
+test("0.9.3 fixa Node 22 e preserva Save Format 4 e Protocol 3",()=>{const root=path.resolve(process.cwd(),".."),pkg=JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8")),version=fs.readFileSync(path.join(root,"server/src/version.ts"),"utf8"),workflow=fs.readFileSync(path.join(root,".github/workflows/ci.yml"),"utf8");assert.equal(pkg.version,"0.9.3");assert.equal(pkg.engines.node,">=22 <23");assert.equal(pkg.devDependencies["@playwright/test"],"1.63.0");assert.equal(pkg.overrides?.nanoid,"3.3.19");assert.equal(pkg.overrides?.qs,"6.16.0");assert.match(version,/APP_VERSION = "0\.9\.3"/);assert.match(version,/SAVE_FORMAT_VERSION = 4/);assert.match(version,/PROTOCOL_VERSION = 3/);assert.match(workflow,/actions\/checkout@v7/);assert.match(workflow,/actions\/setup-node@v7/);});
+
+
+test("FIX4 alinha tipos ao Node 22, ignora artefatos locais e audita produção na CI",()=>{
+  const root=path.resolve(process.cwd(),".."),serverPkg=JSON.parse(fs.readFileSync(path.join(root,"server/package.json"),"utf8")),ignore=fs.readFileSync(path.join(root,".gitignore"),"utf8"),workflow=fs.readFileSync(path.join(root,".github/workflows/ci.yml"),"utf8");
+  assert.match(serverPkg.devDependencies["@types/node"],/^\^22/);
+  for(const entry of ["server/dist/","client/dist/","playwright-report/","test-results/","node_modules/"])assert.match(ignore,new RegExp(entry.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")));
+  assert.match(workflow,/npm audit --omit=dev/);
+  const main=fs.readFileSync(path.join(root,"client/src/main.js"),"utf8");
+  assert.match(html,/id="assetTransferAvailability"/);
+  assert.match(main,/Nenhum jogador disponível para receber este título\./);
+  assert.match(main,/confirm\.disabled=!recipients\.length/);
+});

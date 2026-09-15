@@ -31,6 +31,8 @@ Operações importantes passam por validações do GameEngine e por invariantes 
 
 Trade e Settlement revalidam ownership, saldo, cadeia, falência, construções e outras condições antes do commit. Snapshot/rollback protege operações bilaterais contra aplicação parcial.
 
+Venda voluntária ao banco e transferências patrimoniais também revalidam o estado no momento da conclusão. O cliente não define preço de venda: o servidor resolve o valor pelo catálogo canônico. Títulos hipotecados, com construções ou comprometidos em outra operação são recusados; pendências processadas e trades removidos impedem reaplicação simples por mensagem duplicada.
+
 ## XSS e conteúdo do usuário
 
 Conteúdo controlado por usuário é apresentado com APIs seguras (`textContent`/nós DOM ou escaping apropriado). A suíte inclui casos com texto hostil para verificar comportamento, não apenas presença de uma função de escape.
