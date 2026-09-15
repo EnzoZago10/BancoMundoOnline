@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width,initial-scale=1,viewport-fit=cover" name="viewport"/>
-<meta content="#087ea4" name="theme-color"/>
+<meta content="#0b6b68" name="theme-color"/>
 <meta content="yes" name="mobile-web-app-capable"/>
 <meta content="yes" name="apple-mobile-web-app-capable"/>
 <meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"/>
@@ -28,7 +28,7 @@
 <span aria-label="Aplicativo instalado" class="standalone-only">
       📲
      </span>
-<button class="install hidden" id="installApp">
+<button class="install" id="installApp" type="button">
       Instalar aplicativo
      </button>
 <button aria-label="Alternar tema" class="theme" id="theme">
@@ -564,5 +564,8 @@
 </div><div aria-labelledby="landedTitle" aria-modal="true" class="modal hidden" id="landedModal" role="dialog"><div class="modalbox action-modal"><div class="modal-head"><h2 id="landedTitle">Onde você caiu?</h2><button class="icon-button" id="landedClose" type="button">✕</button></div><input autocomplete="off" id="landedSearch" placeholder="Buscar cidade ou instituição..."/><div class="search-results" id="landedList"></div><div class="landed-context" id="landedContext"></div></div></div><div aria-labelledby="transferTitle" aria-modal="true" class="modal hidden" id="transferModal" role="dialog"><div class="modalbox action-modal"><div class="modal-head"><h2 id="transferTitle">Transferir dinheiro</h2><button class="icon-button" id="transferClose" type="button">✕</button></div><label>Para quem?</label><div id="transferToHost"><select id="to">
 </select></div><label>Quanto?</label><div id="transferAmountHost"><input id="amount" min="1" type="number"/></div><div class="rules-list transfer-preview" id="transferPreview"></div><div class="info hidden" id="transferError"></div><label class="optional-field">Motivo <span>(opcional)</span></label><div id="transferReasonHost"><input id="reason" placeholder="Motivo"/></div><div id="transferSendHost"><button class="primary" id="send">
         Enviar solicitação
-       </button></div></div></div><div aria-labelledby="buildTitle" aria-modal="true" class="modal hidden" id="buildModal" role="dialog"><div class="modalbox action-modal"><div class="modal-head"><h2 id="buildTitle">Onde deseja construir?</h2><button class="icon-button" id="buildClose" type="button">✕</button></div><div id="buildList"></div><button class="text-button" id="showAllBuild" type="button">Ver todos os terrenos</button></div></div></body>
+       </button></div></div></div><div aria-labelledby="buildTitle" aria-modal="true" class="modal hidden" id="buildModal" role="dialog"><div class="modalbox action-modal"><div class="modal-head"><h2 id="buildTitle">Onde deseja construir?</h2><button class="icon-button" id="buildClose" type="button">✕</button></div><div id="buildList"></div><button class="text-button" id="showAllBuild" type="button">Ver todos os terrenos</button></div></div><div aria-labelledby="assetSellTitle" aria-modal="true" class="modal hidden" id="assetSellModal" role="dialog"><div class="modalbox action-modal"><div class="modal-head"><h2 id="assetSellTitle">Vender ao banco</h2><button aria-label="Fechar" class="icon-button" id="assetSellClose" type="button">✕</button></div><div id="assetSellSummary" class="rules-list"></div><div class="row"><button id="assetSellCancel" type="button">Cancelar</button><button class="primary" id="assetSellConfirm" type="button">Solicitar venda</button></div></div></div>
+<div aria-labelledby="assetTransferTitle" aria-modal="true" class="modal hidden" id="assetTransferModal" role="dialog"><div class="modalbox action-modal"><div class="modal-head"><h2 id="assetTransferTitle">Transferir patrimônio</h2><button aria-label="Fechar" class="icon-button" id="assetTransferClose" type="button">✕</button></div><div id="assetTransferSummary" class="rules-list"></div><label for="assetTransferRecipient">Escolha o jogador</label><select id="assetTransferRecipient"></select><p class="small" id="assetTransferAvailability">Nenhum dinheiro será movimentado. O destinatário precisará aceitar.</p><div class="row"><button id="assetTransferCancel" type="button">Cancelar</button><button class="primary" id="assetTransferConfirm" type="button">Enviar solicitação</button></div></div></div>
+<div aria-labelledby="installHelpTitle" aria-modal="true" class="modal hidden" id="installHelpModal" role="dialog"><div class="modalbox action-modal"><div class="modal-head"><h2 id="installHelpTitle">Instalar Banco Mundo</h2><button aria-label="Fechar" class="icon-button" id="installHelpClose" type="button">✕</button></div><div id="installHelpContent"></div><div class="row"><button class="primary" id="installHelpDone" type="button">Entendi</button></div></div></div>
+</body>
 </html>

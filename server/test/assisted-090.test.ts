@@ -34,8 +34,8 @@ test("instituição resolve taxa real e dobra com as seis",()=>{
   const r=g.resolveInstitution("a","omc",7);assert.equal(r.status,"paid");if(!("ownsAll" in r))throw Error("expected payment");assert.equal(r.ownsAll,true);assert.equal(r.amount,700_000);assert.equal(b.balance,before+700_000);
 });
 
-test("venda de título ao banco exige Liability explícita",()=>{
-  const s=stateWithPlayers("a","b"),g=new GameEngine(s),asset=g.purchaseAsset("a","cidade-cabo");assert.throws(()=>g.sellAssetToBank("a",asset.id,""),/Liability aberta/i);const l=g.createLiability({debtorId:"a",creditorType:"BANK",amount:1_000_000,reason:"teste"});const before=s.players.get("a")!.balance;assert.equal(g.sellAssetToBank("a",asset.id,l.id),60_000);assert.equal(s.players.get("a")!.balance,before+60_000);
+test("venda de título ao banco exige dívida aberta explícita",()=>{
+  const s=stateWithPlayers("a","b"),g=new GameEngine(s),asset=g.purchaseAsset("a","cidade-cabo");assert.throws(()=>g.sellAssetToBank("a",asset.id,""),/dívida aberta/i);const l=g.createLiability({debtorId:"a",creditorType:"BANK",amount:1_000_000,reason:"teste"});const before=s.players.get("a")!.balance;assert.equal(g.sellAssetToBank("a",asset.id,l.id),60_000);assert.equal(s.players.get("a")!.balance,before+60_000);
 });
 
 test("falência não apaga múltiplos credores silenciosamente",()=>{

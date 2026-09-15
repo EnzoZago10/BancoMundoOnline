@@ -2,6 +2,20 @@
 
 Este arquivo registra apenas mudanças significativas do projeto. Micro-fixes, resultados temporários de comandos e relatórios de entrega não são mantidos como documentação permanente.
 
+## 0.9.3 — Patrimônio, Transferências, PWA e Transparência
+
+- venda voluntária de propriedades e instituições ao banco com aprovação do ADM, valor canônico e revalidação no aceite;
+- títulos vendidos voltam a ficar sem proprietário e podem ser comprados novamente;
+- ação **Transferir** no Patrimônio reutiliza o Trade existente com dinheiro zero e confirmação do destinatário;
+- cards de Patrimônio exibem valores, hipoteca, construções e somente ações compatíveis com o estado atual;
+- proteção contra dupla execução e conflitos entre pendências/negociações foi reforçada;
+- instalação PWA passou a ter prompt nativo quando disponível e fallback orientado para iOS, Android e outros navegadores;
+- cache da PWA atualizado para 0.9.3, mantendo a proteção contra reload no primeiro `clients.claim()`;
+- Playwright atualizado para 1.63.0, Node 22 declarado em `engines` e GitHub Actions atualizadas para `checkout@v7`/`setup-node@v7`;
+- dependências transitivas de produção `nanoid` e `qs` foram fixadas em versões corrigidas (`3.3.19` e `6.16.0`) para eliminar advisories conhecidos;
+- Save Format permanece 4 e Protocol Version permanece 3; nenhuma migration de banco foi necessária.
+- FIX4: `.gitignore` restaurado para artefatos locais, tipos alinhados ao Node 22, destinatários elegíveis de negociação centralizados, categoria de venda invalidada corrigida, Settlement protegido contra patrimônio já comprometido e audit de produção obrigatório na CI.
+
 ## 0.9.2 — Practical & Transparent Actions
 
 - transferências voluntárias continuam pendentes até aceite do destinatário e nunca viram dívida por falta de saldo;

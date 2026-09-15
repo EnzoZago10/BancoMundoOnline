@@ -5,6 +5,10 @@ import { synchronizedRules } from "./ruleset.js";
 const assetsOf = (player) => schemaValues(player?.assets);
 const idsOf = (collection) => schemaValues(collection);
 
+export function eligibleTradeRecipients(entries, senderId){
+  return [...(entries||[])].filter(([id,p])=>id!==senderId&&p?.connected===true&&p?.bankrupt!==true&&p?.spectator!==true&&p?.jailed!==true);
+}
+
 export function updateTradeAssetLists({room,me,$}){
   const players=room?.state?.players;
   const assetOptions=(playerId,cssClass)=>{
@@ -32,7 +36,9 @@ export function renderTrades({room,me,$,fmt,emptyState}){
       receiveCash=incoming?t.proposerCash:t.recipientCash,
       giveHabeas=incoming?t.recipientHabeasCount:t.proposerHabeasCount,
       receiveHabeas=incoming?t.proposerHabeasCount:t.recipientHabeasCount,
-      names=(ownerId,ids)=>ids.map(id=>assetsOf(schemaGet(players,ownerId)).find(a=>a.id===id)?.name||"patrimônio").join(", ")||"nenhum patrimônio";
+      names=(ownerId,ids)=>ids.map(id=>assetsOf(schemaGet(players,ownerId)).find(a=>a.id===id)?.name||"patrimônio").join(", ")||"nenhum patrimônio",
+      freeTransfer=Number(t.proposerCash)===0&&Number(t.recipientCash)===0&&Number(t.proposerHabeasCount)===0&&Number(t.recipientHabeasCount)===0&&idsOf(t.proposerAssetIds).length===1&&idsOf(t.recipientAssetIds).length===0;
+    if(freeTransfer){const assetName=names(t.proposerId,idsOf(t.proposerAssetIds));return`<div class="pending ${incoming?"incoming":""}"><strong>${incoming?`${esc(playerName(t.proposerId))} quer transferir ${esc(assetName)} para você.`:`Transferência de ${esc(assetName)} aguardando ${esc(playerName(t.recipientId))}`}</strong><div>Você ${incoming?"recebe":"transfere"}: <b>${esc(assetName)}</b></div><div>Dinheiro movimentado: <b>${fmt(0)}</b></div><div class="row">${incoming?`<button data-trade-accept="${t.id}">Aceitar</button><button data-trade-reject="${t.id}">Recusar</button>`:`<button data-trade-cancel="${t.id}">Cancelar</button>`}</div></div>`;}
     return`<div class="pending ${incoming?"incoming":""}"><strong>${incoming?`Proposta de ${esc(playerName(t.proposerId))}`:`Para ${esc(playerName(t.recipientId))}`}</strong><div>Você entrega: ${fmt(giveCash)} + ${esc(names(incoming?t.recipientId:t.proposerId,giveIds))}${giveHabeas?` + ${giveHabeas} Habeas Corpus`:""}</div><div>Você recebe: ${fmt(receiveCash)} + ${esc(names(incoming?t.proposerId:t.recipientId,receiveIds))}${receiveHabeas?` + ${receiveHabeas} Habeas Corpus`:""}</div><div class="row">${incoming?`<button data-trade-accept="${t.id}">Aceitar</button><button data-trade-reject="${t.id}">Recusar</button>`:`<button data-trade-cancel="${t.id}">Cancelar</button>`}</div></div>`;
   }).join(""):emptyState("🤝","Nenhuma negociação pendente","As propostas bilaterais aparecerão aqui.");
   document.querySelectorAll("[data-trade-accept]").forEach(b=>b.onclick=()=>room.send("respond_trade",{id:b.dataset.tradeAccept,accept:true}));

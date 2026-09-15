@@ -31,4 +31,4 @@ app.use((err:any,_req:any,res:any,_next:any)=>{ console.error("Erro HTTP:",err?.
 const s=http.createServer(app); const g=new Server({transport:new WebSocketTransport({server:s})});
 g.define("bank_room",BankRoom).filterBy(["resumeCode"]);
 const port=Number(process.env.PORT||2567); await g.listen(port);
-console.log(`Banco Mundo Online ${APP_VERSION} — Simple & Fast UX executando na porta ${port}`);
+console.log(`Banco Mundo Online ${APP_VERSION} executando na porta ${port}`);

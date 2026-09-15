@@ -7,7 +7,7 @@ import { canRespondPending, canSeePending } from "./features/pending.js";
 import { eventPresentation } from "./features/history.js";
 import { applyOfficialRules, collectRules, synchronizedRules } from "./features/ruleset.js";
 import { renderRoomRules as renderRoomRulesModule, ruleReview as ruleReviewModule, openCreateReview as openCreateReviewModule } from "./features/rules-ui.js";
-import { renderTrades as renderTradesModule, renderLiabilities as renderLiabilitiesModule, renderSettlements as renderSettlementsModule, showLiquidityState as showLiquidityStateModule, updateTradeAssetLists as updateTradeAssetListsModule } from "./features/trading-ui.js";
+import { eligibleTradeRecipients, renderTrades as renderTradesModule, renderLiabilities as renderLiabilitiesModule, renderSettlements as renderSettlementsModule, showLiquidityState as showLiquidityStateModule, updateTradeAssetLists as updateTradeAssetListsModule } from "./features/trading-ui.js";
 import { renderRankings as renderRankingsModule } from "./features/ranking.js";
 import { bindManual } from "./features/manual.js";
 import { bindAssistiveGameplay, renderAssistiveGameplay } from "./features/assistive-gameplay.js";
@@ -26,7 +26,9 @@ let room,
   simpleUX,
   pin = "",
   intentional = false,
-  recoveryCode = "";
+  recoveryCode = "",
+  assetSellId = "",
+  assetTransferId = "";
 const recentKey = "bm-recent-033",
   sessionKey = "bm-session-033",
   fmt = (n) => Number(n).toLocaleString("pt-BR"),
@@ -166,6 +168,29 @@ function queueRender() {
 function bind() {
   bindRoomState({Callbacks,room,$,fmt,toast,sessionKey,queueRender,getMe:()=>me,getIntentional:()=>intentional,onProfileRecovered:(d)=>{me=d.playerId||me;recoveryTools.handleRecovered(d);},showLiquidity:(d)=>showLiquidityStateModule({$,fmt,room,me},d),download:downloadJson});
 }
+function openAssetSale(asset) {
+  const player=room?.state?.players?.get?.(me);if(!asset||!player)return;
+  assetSellId=asset.id;
+  const after=Number(player.balance||0)+Number(asset.purchase||0),summary=$("#assetSellSummary");
+  if(summary)summary.innerHTML=`<div><span>Patrimônio</span><strong>${esc(asset.name)}</strong></div><div><span>Você receberá</span><strong>${fmt(asset.purchase)}</strong></div><div><span>Saldo atual</span><strong>${fmt(player.balance)}</strong></div><div><span>Saldo após venda</span><strong>${fmt(after)}</strong></div><p class="small">Após a aprovação do ADM, o título volta ao banco e poderá ser comprado novamente.</p>`;
+  $("#assetSellModal")?.classList.remove("hidden");
+}
+function refreshAssetTransferRecipients(playersEntries) {
+  const recipients=eligibleTradeRecipients(playersEntries,me),select=$("#assetTransferRecipient"),confirm=$("#assetTransferConfirm"),availability=$("#assetTransferAvailability");
+  if(select){const keep=select.value;select.innerHTML=recipients.map(([id,p])=>`<option value="${id}">${esc(p.name)}</option>`).join("");select.disabled=!recipients.length;if(recipients.some(([id])=>id===keep))select.value=keep;}
+  if(confirm)confirm.disabled=!recipients.length;
+  if(availability)availability.textContent=recipients.length?"Nenhum dinheiro será movimentado. O destinatário precisará aceitar.":"Nenhum jogador disponível para receber este título.";
+  return recipients;
+}
+function openAssetTransfer(asset) {
+  if(!asset)return;assetTransferId=asset.id;
+  const players=room?.state?.players?.entries?[...room.state.players.entries()]:[];
+  refreshAssetTransferRecipients(players);
+  if($("#assetTransferSummary"))$("#assetTransferSummary").innerHTML=`<div><span>Você está transferindo</span><strong>${esc(asset.name)}</strong></div><div><span>Dinheiro</span><strong>${fmt(0)}</strong></div>`;
+  $("#assetTransferModal")?.classList.remove("hidden");
+}
+function closeAssetModal(id){$(id)?.classList.add("hidden");}
+
 function clearFieldError(control) {
   if (!control) return;
   control.classList.remove("input-invalid", "shake");
@@ -209,6 +234,9 @@ function render() {
     opts = ps
       .filter(([id, p]) => id !== me && p.connected)
       .map(([id, p]) => `<option value="${id}">${esc(p.name)}</option>`)
+      .join(""),
+    tradeOpts = eligibleTradeRecipients(ps,me)
+      .map(([id,p])=>`<option value="${id}">${esc(p.name)}</option>`)
       .join("");
   updateSummaryAndBadges({room,me,$,ps,adm,fmt});
   $("#roomName").textContent = room.state.roomName;
@@ -227,9 +255,10 @@ function render() {
   $("#players").innerHTML = ps.map(([id, p]) => playerMarkup({room,me,id,player:p,adm,fmt})).join("") || emptyState("👥", "Nenhum jogador", "Os jogadores conectados aparecerão aqui.");
   renderAdminPlayers({room,me,$,ps,adm});
   $("#to").innerHTML = opts;
-  if ($("#tradeRecipient")) $("#tradeRecipient").innerHTML = `<option value="">Selecione...</option>${opts}`;
+  if ($("#tradeRecipient")) $("#tradeRecipient").innerHTML = tradeOpts?`<option value="">Selecione...</option>${tradeOpts}`:`<option value="">Nenhum jogador disponível</option>`;
+  refreshAssetTransferRecipients(ps);
   const p = room.state.players?.get?.(me);
-  if (p) renderAssets({room,$,player:p,fmt});
+  if (p) renderAssets({room,$,player:p,fmt,catalog,onSell:openAssetSale,onTransfer:openAssetTransfer});
   pending(adm);
   renderTradesModule({room,me,$,fmt,emptyState});
   renderLiabilitiesModule({room,me,$,fmt,emptyState});
@@ -241,10 +270,12 @@ function render() {
 }
 function pending(adm) {
   const all = room.state.pending?.values ? [...room.state.pending.values()] : [],
-    vis = all.filter((q) => canSeePending(q, me, adm));
-  $("#count").textContent = vis.length;
-  $("#count").classList.toggle("hidden", !vis.length);
-  $("#pendingCard")?.classList.toggle("hidden", !vis.length);
+    vis = all.filter((q) => canSeePending(q, me, adm)),
+    gifts = schemaValues(room.state.trades).filter((t) => t.proposerCash === 0 && t.recipientCash === 0 && t.proposerHabeasCount === 0 && t.recipientHabeasCount === 0 && schemaValues(t.proposerAssetIds).length === 1 && schemaValues(t.recipientAssetIds).length === 0 && (t.proposerId === me || t.recipientId === me));
+  const total = vis.length + gifts.length;
+  $("#count").textContent = total;
+  $("#count").classList.toggle("hidden", !total);
+  $("#pendingCard")?.classList.toggle("hidden", !total);
   const markup = (q) => {
     const can = canRespondPending(q, me, adm), from = room.state.players?.get?.(q.fromId), to = room.state.players?.get?.(q.toId);
     const actions = can ? `<button data-y="${q.id}">Aceitar</button><button data-n="${q.id}">Recusar</button>` : `<button data-c="${q.id}">Cancelar</button>`;
@@ -257,16 +288,31 @@ function pending(adm) {
       const title = can ? `${esc(q.fromName)} quer comprar ${esc(q.name)}` : `⏳ Compra de ${esc(q.name)} aguardando ADM`;
       return `<div class="pending ${can ? "incoming" : ""}"><strong>${title}</strong><div class="pending-review"><span>Preço oficial: <b>${fmt(q.purchase)}</b></span><span>Saldo atual: <b>${fmt(current)}</b></span><span>Saldo após compra: <b>${fmt(after)}</b></span></div><div class="row">${actions}</div></div>`;
     }
+    if (q.kind === "bank_sale") {
+      const current = Number(from?.balance || 0), after = current + Number(q.purchase || 0);
+      const title = can ? `${esc(q.fromName)} quer vender ${esc(q.name)} ao banco` : `⏳ Venda de ${esc(q.name)} aguardando ADM`;
+      return `<div class="pending ${can ? "incoming" : ""}"><strong>${title}</strong><div class="pending-review"><span>Valor oficial: <b>${fmt(q.purchase)}</b></span><span>Saldo atual: <b>${fmt(current)}</b></span><span>Saldo após venda: <b>${fmt(after)}</b></span></div><div class="row">${actions}</div></div>`;
+    }
     if (q.kind === "start_bonus") {
       const title = can ? `${esc(q.fromName)} solicita o pró-labore do Início.` : `⏳ Pró-labore do Início aguardando ADM`;
       return `<div class="pending ${can ? "incoming" : ""}"><strong>${title}</strong><div class="pending-review"><span>Jogador: <b>${esc(q.fromName)}</b></span><span>Valor: <b>${fmt(q.amount)}</b></span></div><div class="row">${actions}</div></div>`;
     }
     return `<div class="pending ${can ? "incoming" : ""}"><strong>${esc(q.fromName)}</strong><div>${esc(q.name || fmt(q.amount))} • ${esc(q.reason)}</div><div class="row">${actions}</div></div>`;
   };
-  $("#pending").innerHTML = vis.length ? vis.map(markup).join("") : '<div class="empty">Nenhuma aprovação.</div>';
+  const giftMarkup = (t) => {
+    const proposer = room.state.players?.get?.(t.proposerId), recipient = room.state.players?.get?.(t.recipientId), assetId = schemaValues(t.proposerAssetIds)[0], asset = schemaValues(proposer?.assets).find((a) => a.id === assetId), incoming = t.recipientId === me;
+    const name = asset?.name || "título";
+    const title = incoming ? `${esc(proposer?.name || "Jogador")} quer transferir ${esc(name)} para você.` : `Transferência de ${esc(name)} aguardando ${esc(recipient?.name || "jogador")}`;
+    const actions = incoming ? `<button data-trade-y="${t.id}">Aceitar</button><button data-trade-n="${t.id}">Recusar</button>` : `<button data-trade-c="${t.id}">Cancelar</button>`;
+    return `<div class="pending ${incoming ? "incoming" : ""}"><strong>${title}</strong><div class="pending-review"><span>Você ${incoming ? "recebe" : "transfere"}: <b>${esc(name)}</b></span><span>Dinheiro movimentado: <b>${fmt(0)}</b></span></div><div class="row">${actions}</div></div>`;
+  };
+  $("#pending").innerHTML = total ? [...vis.map(markup), ...gifts.map(giftMarkup)].join("") : '<div class="empty">Nenhuma aprovação.</div>';
   document.querySelectorAll("[data-y]").forEach((b) => (b.onclick = () => room.send("respond", { id: b.dataset.y, accept: true })));
   document.querySelectorAll("[data-n]").forEach((b) => (b.onclick = () => room.send("respond", { id: b.dataset.n, accept: false })));
   document.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => room.send("cancel", { id: b.dataset.c })));
+  document.querySelectorAll("[data-trade-y]").forEach((b) => (b.onclick = () => room.send("respond_trade", { id: b.dataset.tradeY, accept: true })));
+  document.querySelectorAll("[data-trade-n]").forEach((b) => (b.onclick = () => room.send("respond_trade", { id: b.dataset.tradeN, accept: false })));
+  document.querySelectorAll("[data-trade-c]").forEach((b) => (b.onclick = () => room.send("cancel_trade", { id: b.dataset.tradeC })));
 }
 
 function events() {
@@ -469,6 +515,13 @@ $("#createReviewBack")?.addEventListener("click", () => $("#createReviewModal")?
 $("#createReviewConfirm")?.addEventListener("click", () => { $("#createReviewModal")?.classList.add("hidden"); connect(true); });
 $("#adminAdjustPlayer")?.addEventListener("change", updateAdminAdjustAssets);
 $("#adminAdjustApply")?.addEventListener("click", () => { const playerId=$("#adminAdjustPlayer")?.value,assetId=$("#adminAdjustAsset")?.value;if(!playerId||!assetId)return toast("Selecione jogador e propriedade.","warning");room.send("admin_adjust_asset",{playerId,assetId,development:Number($("#adminAdjustDevelopment")?.value||0)}); });
+
+$("#assetSellClose")?.addEventListener("click",()=>closeAssetModal("#assetSellModal"));
+$("#assetSellCancel")?.addEventListener("click",()=>closeAssetModal("#assetSellModal"));
+$("#assetSellConfirm")?.addEventListener("click",()=>{if(!assetSellId)return;room.send("request_bank_sale",{id:assetSellId});closeAssetModal("#assetSellModal");});
+$("#assetTransferClose")?.addEventListener("click",()=>closeAssetModal("#assetTransferModal"));
+$("#assetTransferCancel")?.addEventListener("click",()=>closeAssetModal("#assetTransferModal"));
+$("#assetTransferConfirm")?.addEventListener("click",()=>{const recipientId=$("#assetTransferRecipient")?.value;if(!assetTransferId||!recipientId)return toast("Escolha o jogador que receberá o título.","warning");room.send("trade",{recipientId,proposerCash:0,recipientCash:0,proposerAssetIds:[assetTransferId],recipientAssetIds:[],proposerHabeasCount:0,recipientHabeasCount:0});closeAssetModal("#assetTransferModal");toast("Transferência enviada para confirmação.","info");});
 
 $("#rulesOfficial")?.addEventListener("click", () => { applyOfficialRules(document); ruleReviewModule($); });
 $("#rulesCustom")?.addEventListener("click", () => { ruleReviewModule($); $("#ruleFullGroup")?.focus(); });

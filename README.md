@@ -6,7 +6,7 @@ A interface atual prioriza ações frequentes e mantém a complexidade no backen
 
 ## Estado atual
 
-- Aplicação: `0.9.2`
+- Aplicação: `0.9.3`
 - Save format: `4`
 - Protocol version: `3`
 - Modo principal: **Assistido**, com tabuleiro físico
@@ -18,7 +18,7 @@ O **Modo Jogo Completo** permanece indisponível porque a ordem oficial completa
 
 Requisitos:
 
-- Node.js 22+
+- Node.js 22.x (`>=22 <23`)
 - npm 10+
 - Chromium do Playwright apenas para os testes E2E
 - PostgreSQL 16+ quando a persistência em banco for utilizada
@@ -77,7 +77,7 @@ O recovery fica escondido no fluxo normal e é usado apenas quando o jogador pre
 A navegação principal possui quatro áreas:
 
 - **Jogo** — saldo, vez, `Caí em...`, transferir, construir, dados quando habilitados, pendências e dívidas contextuais;
-- **Patrimônio** — propriedades, construções e hipotecas;
+- **Patrimônio** — propriedades/instituições, construções, hipotecas, venda voluntária ao banco e transferência simplificada de títulos;
 - **Jogadores** — participantes e ranking;
 - **Mais** — regras da sala, histórico, ajuda, perfil/recovery, negociações e administração.
 
@@ -86,6 +86,9 @@ A ação **Caí em...** pesquisa propriedades e instituições e mostra o fluxo 
 Transferências voluntárias são solicitações entre jogadores: o destinatário confere **de**, **para** e **valor** e pode aceitar ou recusar. Falta de saldo em transferência voluntária gera apenas **Saldo insuficiente** — nunca cria dívida. Pagamentos obrigatórios, por outro lado, continuam usando Dívida/Central de Liquidez quando necessário.
 
 Em **Mais → Banco**, **Passei pelo Início** solicita ao ADM o pró-labore definido no Ruleset (normalmente 200.000). Esse fluxo funciona mesmo sem iniciar o controle digital de turnos. O turn tracker é opcional e serve apenas como auxílio quando o grupo quiser usá-lo.
+
+Em **Patrimônio**, títulos elegíveis podem ser vendidos voluntariamente ao banco. A venda cria uma solicitação para o ADM; o servidor recalcula o valor pelo catálogo, revalida ownership/hipoteca/construções/conflitos e só então devolve o título ao mercado. O botão **Transferir** é apenas um atalho para a negociação existente com dinheiro zero: o destinatário precisa aceitar e os saldos não mudam.
+
 
 ## Modo Assistido
 
@@ -120,7 +123,7 @@ Quando falta dinheiro para uma obrigação, o saldo não fica negativo: o domín
 - dados digitais opcionais sem movimentação automática de peões;
 - histórico estruturado e ranking;
 - saves, backups, importação e recovery de perfil;
-- PWA instalável;
+- PWA instalável com prompt nativo quando disponível e instruções manuais para iOS/Android/outros navegadores;
 - PostgreSQL com CAS e lease distribuído quando configurado.
 
 ## Configuração
@@ -202,6 +205,7 @@ npm run build
 npm run lint
 npx playwright install chromium
 npm run test:e2e
+npm audit --omit=dev
 ```
 
 A suíte cobre domínio, regras, pagamentos, segurança, recovery, persistência, invariantes, PWA, Colyseus real e fluxos E2E da UX, incluindo viewport mobile.
@@ -234,7 +238,7 @@ Em produção:
 
 ## PWA e acessibilidade
 
-A PWA mantém a interface instalável e cacheia apenas recursos apropriados. Operações multiplayer/financeiras continuam dependendo do servidor; o modo offline não transforma ações de jogo em operações locais.
+A PWA mantém a interface instalável e cacheia apenas recursos apropriados. Em navegador normal, a ação **Instalar** continua encontrável mesmo quando `beforeinstallprompt` não existe: Chromium usa o prompt nativo quando fornecido; iOS/iPadOS orienta **Compartilhar → Adicionar à Tela de Início**; Android e outros navegadores recebem instruções manuais curtas. Em modo `standalone`, o CTA de instalação é ocultado. O fluxo de atualização do Service Worker continua independente da instalação. Operações multiplayer/financeiras continuam dependendo do servidor; o modo offline não transforma ações de jogo em operações locais.
 
 A interface atual inclui foco visível por teclado, regiões dinâmicas para estados importantes, alvos de toque adequados, estados que não dependem somente de cor, suporte a `prefers-reduced-motion` e layout mobile-first sem navegação horizontal principal.
 

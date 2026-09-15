@@ -65,9 +65,47 @@ test("Construção livre fica simples e uniformidade continua independente",asyn
   await page.locator('.tab[data-tab="catalog"]').click();await requestPurchase(page,"Londres");await page.locator("#pending [data-y]").first().click();await page.locator("#openBuild").click();const london=page.locator('#buildList .build-row').filter({hasText:"Londres"});await expect(london.locator("button")).toBeVisible();await london.locator("button").click();await page.locator("#buildClose").click();await requestPurchase(page,"Berlim");await page.locator("#pending [data-y]").first().click();await page.locator("#openBuild").click();const londonAfter=page.locator('#buildList .build-row').filter({hasText:"Londres"});const berlin=page.locator('#buildList .build-row').filter({hasText:"Berlim"});await expect(berlin.locator("button")).toBeVisible();await expect(londonAfter.locator("button")).toHaveCount(0);expectCleanBrowser(page);
 });
 
+
+
+test("patrimônio: venda voluntária ao banco passa pelo ADM e título volta ao mercado",async({page,browser})=>{
+  const roomId=await createRoom(page,{name:"Alice"});const second=await browser.newContext();const bob=await second.newPage();await joinRoom(bob,roomId,"Bob");
+  await requestPurchase(bob,"Londres");await expect(page.locator("#pending")).toContainText(/Bob quer comprar Londres/i);await page.locator("#pending [data-y]").first().click();
+  await bob.locator('.tab[data-tab="assets"]').click();const card=bob.locator('#myAssets .asset').filter({hasText:"Londres"});await expect(card).toBeVisible();const before=money(await bob.locator("#summaryBalance").textContent());
+  await card.locator('[data-bank-sell]').click();await expect(bob.locator("#assetSellModal")).toBeVisible();await expect(bob.locator("#assetSellSummary")).toContainText(/Londres/);await expect(bob.locator("#assetSellSummary")).toContainText(/240\.000/);await bob.locator("#assetSellConfirm").click();
+  await expect(page.locator("#pendingCard")).toBeVisible();await expect(page.locator("#pending")).toContainText(/Bob quer vender Londres(?:\s*-\s*Inglaterra)? ao banco/i);await page.locator("#pending [data-y]").first().click();await expect(card).toHaveCount(0);await expect.poll(async()=>money(await bob.locator("#summaryBalance").textContent())).toBe(before+240000);
+  await page.locator('.tab[data-tab="catalog"]').click();await requestPurchase(page,"Londres");await expect(page.locator("#pending")).toContainText(/Alice quer comprar Londres/i);await page.locator("#pending [data-y]").first().click();await page.locator('.tab[data-tab="assets"]').click();await expect(page.locator('#myAssets .asset').filter({hasText:"Londres"})).toBeVisible();
+  expectCleanBrowser(page);expectCleanBrowser(bob);await second.close();
+});
+
+test("patrimônio: Transferir reutiliza negociação, exige aceite e mantém saldos",async({page,browser})=>{
+  const roomId=await createRoom(page,{name:"Alice"});const second=await browser.newContext();const bob=await second.newPage();await joinRoom(bob,roomId,"Bob");
+  await requestPurchase(bob,"Londres");await page.locator("#pending [data-y]").first().click();await bob.locator('.tab[data-tab="assets"]').click();const card=bob.locator('#myAssets .asset').filter({hasText:"Londres"});await expect(card).toBeVisible();const beforeAlice=money(await page.locator("#summaryBalance").textContent()),beforeBob=money(await bob.locator("#summaryBalance").textContent());
+  await card.locator('[data-asset-transfer]').click();await expect(bob.locator("#assetTransferModal")).toBeVisible();await bob.locator("#assetTransferRecipient").selectOption({label:"Alice"});await expect(bob.locator("#assetTransferModal")).toContainText(/Nenhum dinheiro será movimentado/i);await bob.locator("#assetTransferConfirm").click();
+  await expect(page.locator("#pendingCard")).toBeVisible();await expect(page.locator("#pending")).toContainText(/Bob quer transferir Londres(?:\s*-\s*Inglaterra)? para você/i);await expect(card).toBeVisible();await page.locator("#pending [data-trade-y]").click();await expect(card).toHaveCount(0);await page.locator('.tab[data-tab="assets"]').click();await expect(page.locator('#myAssets .asset').filter({hasText:"Londres"})).toBeVisible();expect(money(await page.locator("#summaryBalance").textContent())).toBe(beforeAlice);expect(money(await bob.locator("#summaryBalance").textContent())).toBe(beforeBob);
+  expectCleanBrowser(page);expectCleanBrowser(bob);await second.close();
+});
+
+test("PWA usa prompt nativo quando beforeinstallprompt existe e oculta CTA após appinstalled",async({page})=>{
+  watch(page);await page.goto("/");await expect(page.locator("#installApp")).toBeVisible();
+  await page.evaluate(()=>{window.__installPromptCalls=0;const event=new Event("beforeinstallprompt");Object.defineProperty(event,"prompt",{value:async()=>{window.__installPromptCalls++;}});Object.defineProperty(event,"userChoice",{value:Promise.resolve({outcome:"accepted"})});window.dispatchEvent(event);});
+  await page.locator("#installApp").click();await expect.poll(()=>page.evaluate(()=>window.__installPromptCalls)).toBe(1);await page.evaluate(()=>window.dispatchEvent(new Event("appinstalled")));await expect(page.locator("#installApp")).toBeHidden();await expect(page.locator("#toast")).toContainText(/instalado com sucesso/i);expectCleanBrowser(page);
+});
+
+test("PWA Android mantém instalação acessível sem beforeinstallprompt e mostra fallback",async({browser})=>{
+  const context=await browser.newContext({viewport:{width:390,height:844},userAgent:"Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"});const page=await context.newPage();watch(page);await page.goto("/");await expect(page.locator("#installApp")).toBeVisible();await page.locator("#installApp").click();await expect(page.locator("#installHelpModal")).toBeVisible();await expect(page.locator("#installHelpContent")).toContainText(/menu do navegador/i);await expect(page.locator("#installHelpContent")).toContainText(/Adicionar à tela inicial|Instalar aplicativo/i);expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1)).toBe(true);expectCleanBrowser(page);await context.close();
+});
+
+test("PWA iOS orienta Adicionar à Tela de Início sem depender de prompt nativo",async({browser})=>{
+  const context=await browser.newContext({viewport:{width:390,height:844},userAgent:"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"});const page=await context.newPage();watch(page);await page.goto("/");await page.locator("#installApp").click();await expect(page.locator("#installHelpModal")).toBeVisible();await expect(page.locator("#installHelpContent")).toContainText(/Compartilhar/);await expect(page.locator("#installHelpContent")).toContainText(/Adicionar à Tela de Início/);expectCleanBrowser(page);await context.close();
+});
+
+test("PWA em modo standalone não mostra ação de instalar",async({page})=>{
+  await page.addInitScript(()=>{const native=window.matchMedia.bind(window);window.matchMedia=(query)=>query.includes("display-mode: standalone")?{matches:true,media:query,onchange:null,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){},dispatchEvent(){return true;}}:native(query);});watch(page);await page.goto("/");await expect(page.locator("#installApp")).toBeHidden();expectCleanBrowser(page);
+});
+
 test.describe("mobile 390x844",()=>{
   test.use({viewport:{width:390,height:844}});
   test("home e partida cabem sem navegação horizontal e ações principais ficam visíveis",async({page})=>{
-    watch(page);await page.goto("/");await expect(page.locator("#ruleFullGroup")).toBeHidden();await expect(page.locator("#create")).toBeVisible();const homeText=await page.locator("body").innerText();expect(homeText).not.toMatch(/SOURCE_MISSING|LEGACY_UNVERIFIED|APP_BEHAVIOR|Transaction Integrity|Game Engine/);await page.locator("#name").fill("Mobile");await page.locator("#create").click();await expect(page.locator("#game")).toBeVisible();await expect(page.locator(".tabs .tab")).toHaveCount(4);await expect(page.locator("#openLanded")).toBeVisible();await expect(page.locator("#openTransfer")).toBeVisible();await expect(page.locator("#openBuild")).toBeVisible();const noHorizontalScroll=await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1);expect(noHorizontalScroll).toBe(true);await page.locator("#openLanded").click();const box=await page.locator("#landedModal .modalbox").boundingBox();expect(box.width).toBeLessThanOrEqual(390);expectCleanBrowser(page);
+    watch(page);await page.goto("/");await expect(page.locator("#ruleFullGroup")).toBeHidden();await expect(page.locator("#create")).toBeVisible();await expect(page.locator("#installApp")).toBeVisible();const homeText=await page.locator("body").innerText();expect(homeText).not.toMatch(/SOURCE_MISSING|LEGACY_UNVERIFIED|APP_BEHAVIOR|Transaction Integrity|Game Engine/);await page.locator("#name").fill("Mobile");await page.locator("#create").click();await expect(page.locator("#game")).toBeVisible();await expect(page.locator(".tabs .tab")).toHaveCount(4);await expect(page.locator("#openLanded")).toBeVisible();await expect(page.locator("#openTransfer")).toBeVisible();await expect(page.locator("#openBuild")).toBeVisible();const noHorizontalScroll=await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1);expect(noHorizontalScroll).toBe(true);await page.locator("#openLanded").click();const box=await page.locator("#landedModal .modalbox").boundingBox();expect(box.width).toBeLessThanOrEqual(390);expectCleanBrowser(page);
   });
 });
