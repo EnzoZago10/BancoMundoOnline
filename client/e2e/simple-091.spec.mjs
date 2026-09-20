@@ -85,6 +85,16 @@ test("patrimônio: Transferir reutiliza negociação, exige aceite e mantém sal
   expectCleanBrowser(page);expectCleanBrowser(bob);await second.close();
 });
 
+test("backup do ADM baixa o estado atual e pode ser restaurado pela Home antes de entrar",async({page})=>{
+  await createRoom(page,{name:"Alice"});
+  await page.locator('.tab[data-tab="rules"]').click();await page.locator("#adminDetails summary").click();await expect(page.locator("#backup")).toBeVisible();
+  const downloadPromise=page.waitForEvent("download");await page.locator("#backup").click();const download=await downloadPromise;expect(download.suggestedFilename()).toMatch(/BancoMundo-.*-v0\.9\.3\.json/);const backupPath=await download.path();expect(backupPath).toBeTruthy();await expect(page.locator("#toast")).toContainText(/Backup baixado com sucesso/i);
+  const preflight=await page.request.fetch("http://127.0.0.1:2567/api/import",{method:"OPTIONS",headers:{Origin:"http://127.0.0.1:5173","Access-Control-Request-Method":"POST","Access-Control-Request-Headers":"content-type,x-room-pin"}});expect(preflight.status()).toBe(204);expect(preflight.headers()["access-control-allow-headers"]||"").toMatch(/x-room-pin/i);
+  await page.goto("/");await expect(page.locator("#lobbyBackupCard")).toBeVisible();await page.locator("#lobbyImportFile").setInputFiles(backupPath);await page.locator("#lobbyImportPin").fill("5678");await page.locator("#lobbyImportBackup").click();await expect(page.locator("#lobbyImportResult")).toContainText(/Backup restaurado com sucesso/i);await expect(page.locator("#lobbyImportResult")).toContainText(/Código da nova partida/i);
+  const enter=page.locator("#lobbyImportResult button").filter({hasText:"Entrar como Alice"});await expect(enter).toBeVisible();await enter.click();await expect(page.locator("#game")).toBeVisible();await expect(page.locator("#myProfileName")).toContainText("Alice");await expect(page.locator("#summaryRoom")).toContainText(/Pausada/i);
+  await page.locator('.tab[data-tab="rules"]').click();await page.locator("#adminDetails summary").click();await expect(page.locator("#pause")).toContainText(/Retomar partida/i);await page.locator("#pause").click();await expect(page.locator("#summaryRoom")).toContainText(/Aberta/i);expectCleanBrowser(page);
+});
+
 test("PWA usa prompt nativo quando beforeinstallprompt existe e oculta CTA após appinstalled",async({page})=>{
   watch(page);await page.goto("/");await expect(page.locator("#installApp")).toBeVisible();
   await page.evaluate(()=>{window.__installPromptCalls=0;const event=new Event("beforeinstallprompt");Object.defineProperty(event,"prompt",{value:async()=>{window.__installPromptCalls++;}});Object.defineProperty(event,"userChoice",{value:Promise.resolve({outcome:"accepted"})});window.dispatchEvent(event);});

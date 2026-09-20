@@ -11,12 +11,12 @@ import { eligibleTradeRecipients, renderTrades as renderTradesModule, renderLiab
 import { renderRankings as renderRankingsModule } from "./features/ranking.js";
 import { bindManual } from "./features/manual.js";
 import { bindAssistiveGameplay, renderAssistiveGameplay } from "./features/assistive-gameplay.js";
-import { openRoomSession, setConnectionState } from "./features/session.js";
+import { openRoomSession, setConnectionState, wakeBackend } from "./features/session.js";
 import { createRecoveryTools } from "./features/recovery.js";
 import { emptyState, playerMarkup, updateSummaryAndBadges } from "./features/player-rendering.js";
 import { renderAssets } from "./features/assets.js";
 import { renderAdminPlayers } from "./features/admin-ui.js";
-import { downloadJson, exportBackup, importBackup } from "./features/backup.js";
+import { downloadJson, importBackup, renderImportedBackup } from "./features/backup.js";
 import { bindRoomState } from "./features/room-binding.js";
 import { initSimpleUX } from "./features/simple-ux.js";
 let catalog = { developmentLabels: [], properties: [], organizations: [] };
@@ -57,7 +57,7 @@ const recoveryTools = createRecoveryTools({$,getRoom:()=>room,getMe:()=>me,toast
 const fieldLabels = {
   name: "Nome do jogador", balance: "Saldo inicial oficial", mode: "Modo da partida", code: "Código temporário ou permanente",
   pin: "PIN da partida", recoveryInput: "Código pessoal de recuperação (opcional)",
-  importFile: "Arquivo de backup", prop: "Propriedade",
+  importFile: "Arquivo de backup", lobbyImportFile: "Arquivo de backup", lobbyImportPin: "Novo PIN da partida restaurada", prop: "Propriedade",
   propReason: "Motivo da compra", org: "Organização", orgReason: "Motivo da compra",
   to: "Destinatário", amount: "Valor do pagamento", reason: "Motivo do pagamento",
   bankAmount: "Valor da operação bancária", bankReason: "Motivo da operação",
@@ -243,6 +243,7 @@ function render() {
   const modeLabel=room.state.mode === "assisted" ? "Modo Assistido" : "Modo de partida"; if ($("#roomModeLabel")) $("#roomModeLabel").textContent = modeLabel; if ($("#appModeHeader")) $("#appModeHeader").textContent = "Companheiro para sua partida";
   $("#saveCode").textContent =
     `Código permanente da partida: ${room.state.saveCode} • Último salvamento: ${room.state.lastSavedAt ? new Date(room.state.lastSavedAt).toLocaleString("pt-BR") : "agora"}`;
+  if($("#pause")){$("#pause").textContent=room.state.paused?"▶️ Retomar partida":"⏸️ Pausar e salvar";$("#pause").classList.toggle("primary",Boolean(room.state.paused));}
   $("#roomCode").textContent =
     room.roomId +
     (room.state.locked ? " • Entradas bloqueadas" : " • Sala aberta");
@@ -422,10 +423,16 @@ $("#fullInvite").onclick = () =>
     `Banco Mundo Online\nCódigo: ${room.roomId}\nPIN: ${pin}`,
   );
 $("#lock").onclick = () => room.send("toggle_lock");
-$("#pause").onclick = () =>
-  confirm("Pausar e salvar a partida para continuar outro dia?") &&
-  room.send("pause_room");
-$("#backup").onclick = () => exportBackup({apiBase,room,pin,toast});
+$("#pause").onclick = () => {
+  if(!room)return;
+  if(room.state.paused){room.send("resume_room");toast("Solicitação para retomar a partida enviada.","info");return;}
+  if(confirm("Pausar e salvar a partida para continuar outro dia?"))room.send("pause_room");
+};
+$("#backup").onclick = () => {
+  if(!room)return toast("Entre em uma partida antes de baixar o backup.","warning");
+  const button=$("#backup");button.disabled=true;button.textContent="Preparando backup...";room.send("backup");
+  setTimeout(()=>{if(button.disabled){button.disabled=false;button.textContent="Baixar backup";}},8000);
+};
 $("#report").onclick = () => room.send("report");
 $("#end").onclick = () => $("#endModal").classList.remove("hidden");
 $("#endBack").onclick = () => $("#endModal").classList.add("hidden");
@@ -507,7 +514,25 @@ $("#transferAdmin").onclick = () => {
   if (!playerId) return toast("Selecione um jogador online.");
   room.send("transfer_admin", { playerId });
 };
-$("#importBackup").onclick = () => importBackup({apiBase,file:$("#importFile").files?.[0],pin:$("#pin").value.trim(),$,toast});
+function chooseImportedProfile(profile,data,restoredPin=""){
+  recoveryCode=profile.recoveryToken;
+  $("#name").value=profile.name;$("#code").value=data.saveCode;$("#recoveryInput").value=profile.recoveryToken;
+  if(restoredPin)$("#pin").value=restoredPin;
+  connect(false,{name:profile.name,pin:restoredPin,deviceToken:localStorage.deviceToken||(localStorage.deviceToken=crypto.randomUUID()),recoveryCode:profile.recoveryToken,resumeCode:data.saveCode,initialBalance:2558000});
+}
+async function restoreBackupFromLobby(){
+  const button=$("#lobbyImportBackup"),file=$("#lobbyImportFile")?.files?.[0],restoredPin=$("#lobbyImportPin")?.value?.trim()||"";
+  if(!file)return toast("Selecione um backup JSON.","warning");
+  button.disabled=true;button.textContent="Restaurando...";
+  try{
+    await wakeBackend({isLocal,apiBase,$});
+    const data=await importBackup({apiBase,file,pin:restoredPin,toast,onImported:data=>renderImportedBackup({result:$("#lobbyImportResult"),data,onChooseProfile:profile=>chooseImportedProfile(profile,data,restoredPin)})});
+    if(data)$("#code").value=data.saveCode;
+  }catch(error){toast(error?.message||"Não foi possível acessar o servidor para restaurar o backup.","error");}
+  finally{button.disabled=false;button.textContent="Restaurar backup";setConnectionState($,false);}
+}
+$("#lobbyImportBackup")?.addEventListener("click",restoreBackupFromLobby);
+$("#importBackup").onclick = async()=>{const data=await importBackup({apiBase,file:$("#importFile").files?.[0],pin:$("#pin").value.trim(),toast,onImported:data=>renderImportedBackup({result:$("#importResult"),data})});if(data)$("#code").value=data.saveCode;};
 
 
 

@@ -74,6 +74,13 @@
 <div class="section-kicker">Entrar com amigos</div><div id="codeHost"><input id="code" placeholder="Código da sala"/></div>
 <div class="secondary-links"><button class="text-button" id="showPinEntry" type="button">Sala com PIN?</button><button class="text-button" id="showRecovery" type="button">Trocou de aparelho? Recuperar jogador</button></div>
 <div class="hidden" id="joinPinWrap"></div><div class="hidden" id="recoveryJoinBox"><input autocomplete="off" id="recoveryInput" placeholder="Código de recuperação"/></div><div id="joinHost"><button id="join">Entrar na partida</button></div>
+</div><div class="quick-restore card" id="lobbyBackupCard">
+<div class="section-kicker">Continuar uma partida salva</div><h3>Restaurar backup</h3>
+<p class="small">Selecione o arquivo JSON baixado anteriormente. A restauração cria uma cópia segura da partida e permite escolher qual jogador você era.</p>
+<input accept="application/json,.json" id="lobbyImportFile" type="file"/>
+<input autocomplete="off" id="lobbyImportPin" placeholder="Novo PIN para a partida restaurada (opcional)"/>
+<button class="primary" id="lobbyImportBackup" type="button">Restaurar backup</button>
+<div aria-live="polite" class="info hidden" id="lobbyImportResult"></div>
 </div><div class="hidden" id="hiddenLobbyDefaults"><input aria-readonly="true" class="hidden" id="balance" readonly="" type="number" value="2558000"/><select class="hidden" id="mode" value="assisted">
 <option value="assisted">
        Modo Assistido — tabuleiro físico

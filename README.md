@@ -187,9 +187,9 @@ As migrations reais ficam em `server/migrations/` e são registradas em `schema_
 
 - mesmo navegador: o identificador local pode recuperar o perfil;
 - outro navegador/aparelho: use o código pessoal de recuperação;
-- backup: exportação protegida quando a sala usa PIN;
-- importação: valida estrutura, limites, catálogo e invariantes antes de aceitar o estado;
-- importações geram novos recovery tokens e um novo código de save.
+- backup: o ADM baixa um JSON do estado atual diretamente da sala autenticada; o servidor salva antes de gerar o arquivo e remove dados privados de recovery;
+- importação: pode ser feita já na tela inicial, antes de entrar em qualquer sala; valida estrutura, limites, catálogo e invariantes antes de aceitar o estado;
+- a restauração cria uma cópia segura, gera novo código de save e novos recovery tokens; depois basta escolher o perfil e entrar na partida restaurada.
 
 Dados privados de recovery não são sincronizados no Schema público nem incluídos em texto puro nos backups exportados.
 

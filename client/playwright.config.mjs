@@ -14,14 +14,14 @@ export default defineConfig({
       command: "npm run dev:server",
       cwd: workspaceRoot,
       url: "http://127.0.0.1:2567/api/health",
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 30_000
     },
     {
       command: "npm run dev:client",
       cwd: workspaceRoot,
       url: "http://127.0.0.1:5173",
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 30_000
     }
   ]

@@ -82,3 +82,47 @@ test("FIX4 alinha tipos ao Node 22, ignora artefatos locais e audita produção 
   assert.match(main,/Nenhum jogador disponível para receber este título\./);
   assert.match(main,/confirm\.disabled=!recipients\.length/);
 });
+
+
+test("FIX5 permite baixar backup ativo e restaurar antes de entrar",()=>{
+  const main=fs.readFileSync(path.join(clientRoot,"src/main.js"),"utf8"),backup=fs.readFileSync(path.join(clientRoot,"src/features/backup.js"),"utf8"),binding=fs.readFileSync(path.join(clientRoot,"src/features/room-binding.js"),"utf8"),room=fs.readFileSync(path.resolve(process.cwd(),"src/room.ts"),"utf8");
+  assert.match(html,/id="lobbyBackupCard"/);assert.match(html,/id="lobbyImportFile"/);assert.match(html,/id="lobbyImportBackup"/);assert.match(html,/id="lobbyImportResult"/);
+  assert.match(main,/room\.send\("backup"\)/);assert.match(main,/resume_room/);assert.match(main,/wakeBackend/);assert.match(backup,/Entrar como/);
+  assert.match(binding,/onMessage\("backup"/);assert.match(room,/backup:this\.backup/);assert.match(room,/sanitizeForExport\(serialize\(this\.state,this\.pinHash\)\)/);
+  assert.match(backup,/document\.body\.append\(a\)/);assert.match(backup,/onChooseProfile/);assert.doesNotMatch(backup,/if\(!pin\)/);
+});
+
+
+test("FIX6/FIX8 mantém preflight CORS para X-Room-Pin com headers centralizados",()=>{
+  const root=path.resolve(process.cwd(),".."),serverIndex=fs.readFileSync(path.join(root,"server/src/index.ts"),"utf8");
+  assert.match(serverIndex,/const corsAllowedHeaders=\[[^\]]*"Content-Type"[^\]]*"X-Room-Pin"[^\]]*\]/);
+  assert.match(serverIndex,/allowedHeaders:corsAllowedHeaders/);
+  assert.match(serverIndex,/matchMaker\.controller\.DEFAULT_CORS_HEADERS\["Access-Control-Allow-Headers"\]=corsAllowedHeadersValue/);
+  assert.match(serverIndex,/app\.post\("\/api\/import"/);
+});
+
+test("FIX7 responde preflight real e não reutiliza servidor E2E antigo",()=>{
+  const root=path.resolve(process.cwd(),".."),serverIndex=fs.readFileSync(path.join(root,"server/src/index.ts"),"utf8"),pw=fs.readFileSync(path.join(root,"client/playwright.config.mjs"),"utf8");
+  assert.match(serverIndex,/req\.method!=="OPTIONS"/);
+  assert.match(serverIndex,/Access-Control-Allow-Methods/);
+  assert.doesNotMatch(pw,/reuseExistingServer: true/);
+  assert.match(pw,/reuseExistingServer: false/);
+});
+
+test("FIX8 alinha CORS do Colyseus e importa PIN no corpo JSON",()=>{
+  const root=path.resolve(process.cwd(),".."),serverIndex=fs.readFileSync(path.join(root,"server/src/index.ts"),"utf8"),backup=fs.readFileSync(path.join(root,"client/src/features/backup.js"),"utf8");
+  assert.match(serverIndex,/Server, matchMaker/);
+  assert.match(serverIndex,/matchMaker\.controller\.DEFAULT_CORS_HEADERS\["Access-Control-Allow-Headers"\]=corsAllowedHeadersValue/);
+  assert.match(serverIndex,/X-Room-Pin/);
+  assert.match(serverIndex,/const wrapped=Boolean/);
+  assert.match(serverIndex,/wrapped\?q\.body\.pin/);
+  assert.match(backup,/JSON\.stringify\(\{backup:raw,pin\}\)/);
+  assert.doesNotMatch(backup,/headers\["X-Room-Pin"\]/);
+});
+
+test("FIX10 entra diretamente no save restaurado sem gerar 522 de roomId inválido",()=>{
+  const root=path.resolve(process.cwd(),".."),main=fs.readFileSync(path.join(root,"client/src/main.js"),"utf8"),session=fs.readFileSync(path.join(root,"client/src/features/session.js"),"utf8");
+  assert.match(main,/recoveryCode:profile\.recoveryToken,resumeCode:data\.saveCode/);
+  assert.doesNotMatch(main,/recoveryCode:profile\.recoveryToken,roomId:data\.saveCode/);
+  assert.match(session,/if\(override\?\.resumeCode\)room=await client\.joinOrCreate\("bank_room",data\)/);
+});
