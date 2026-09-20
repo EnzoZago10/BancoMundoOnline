@@ -92,3 +92,15 @@ test("Colyseus real: sala protegida pede PIN somente quando necessário",async()
   const bReady=new Promise<any>(resolve=>b.onMessage("profile_recovered",resolve));b.send("client_ready");await bReady;
   await b.leave();await a.leave();
 }));
+
+
+test("Colyseus real: ADM baixa backup do estado ativo sem expor segredos",async()=>withServer(async endpoint=>{
+  const client=new ColyseusClient(endpoint);
+  const room=await client.create("bank_room",{name:"Backup ADM",pin:"1234",deviceToken:"backup-device",mode:"assisted",operationId:crypto.randomUUID()});
+  room.onMessage("action_feedback",()=>{});
+  const ready=new Promise<any>(resolve=>room.onMessage("profile_recovered",resolve));room.send("client_ready");const profile=await ready;assert.ok(profile.recoveryCode);
+  const message=new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error("timeout aguardando backup")),3000);room.onMessage("backup",data=>{clearTimeout(timer);resolve(data);});});
+  room.send("backup");const data=await message;assert.match(data.filename,/BancoMundo-.*-v0\.9\.3\.json/);const backup=JSON.parse(data.content);assert.equal(backup.format,"BancoMundoSave");assert.equal(backup.state.saveCode,(room.state as any).saveCode);assert.equal("pinHash" in backup,false);assert.equal("privateData" in backup,false);
+  const player=Object.values<any>(backup.state.players)[0];assert.equal("recoveryTokenHash" in player,false);assert.equal("deviceTokenHash" in player,false);
+  await room.leave();
+}));

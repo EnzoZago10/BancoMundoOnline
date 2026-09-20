@@ -4,7 +4,7 @@ import { Player, State } from "./state.js";
 import { APP_VERSION } from "./version.js";
 import { secureToken, hashToken, safeEqualHash, hashPin, verifyPin, validatePin } from "./domain/security.js";
 import { isOfficialRules, normalizeRules } from "./domain/ruleset.js";
-import { atomicSave, code, loadSaveWithFallback, restore, SaveConflictError } from "./persistence.js";
+import { atomicSave, code, loadSaveWithFallback, restore, sanitizeForExport, serialize, SaveConflictError } from "./persistence.js";
 import { acquireRoomLease, databaseEnabled, recordSharedRateLimit, releaseRoomLease, renewRoomLease } from "./database.js";
 import { RoomRuntime } from "./room/runtime.js";
 import { createHandlers } from "./room/handlers/index.js";
@@ -28,7 +28,7 @@ export class BankRoom extends Room<{state:State}>{
     if(!(await acquireRoomLease(this.state.saveCode)))throw Error("Esta partida já está ativa em outra instância. Aguarde a expiração do lease ou conecte à instância que possui a sala.");
     this.rt=new RoomRuntime(this.state);this.rt.markDirty();
     if(!options.resumeCode){const rulesPlain=JSON.parse(JSON.stringify(this.state.rules)),rulesetHash=crypto.createHash("sha256").update(JSON.stringify(rulesPlain)).digest("hex");this.rt.event({code:"RULESET_SELECTED",category:"system",message:this.state.rules.preset==="official"?"Partida criada com regras oficiais.":"Partida criada com regras personalizadas.",metadata:{rulesetHash,rules:rulesPlain}});}
-    const handlers={...createHandlers(this.rt,this),client_ready:this.clientReady,report:this.report,pause_room:this.pauseRoom,resume_room:this.resumeRoom,end_room:this.endRoom};
+    const handlers={...createHandlers(this.rt,this),client_ready:this.clientReady,report:this.report,backup:this.backup,pause_room:this.pauseRoom,resume_room:this.resumeRoom,end_room:this.endRoom};
     for(const[message,handler]of Object.entries(handlers))this.onMessage(message,(client:Client,data:unknown)=>{if(this.persistenceConflict)return client.send("error","Sala pausada por conflito de persistência. Nenhuma mutação é aceita até recuperação administrativa.");try{(handler as any).call(this,client,data);}catch(e){client.send("error",e instanceof Error?e.message:"Operação inválida.");}if(this.rt.isDirty())this.scheduleSave();});
     this.setSimulationInterval(()=>{void this.maintenanceTick();},15_000);
     await this.saveNow(true);
@@ -48,6 +48,9 @@ export class BankRoom extends Room<{state:State}>{
   onReconnect(client:Client){const p=this.rt.playerForSession(client.sessionId);if(!p)return;p.connected=true;p.abandoned=false;if(p.id===this.state.hostId&&this.hostSuccessionTimer){clearTimeout(this.hostSuccessionTimer);this.hostSuccessionTimer=null;}this.rt.event({code:"PLAYER_RECONNECTED",category:"presence",actorId:p.id,message:`${p.name} reconectou à sala.`});this.scheduleSave();}
   onLeave(client:Client){const p=this.rt.playerForSession(client.sessionId);this.pendingRecoveryBySession.delete(client.sessionId);if(!p)return;p.connected=false;this.rt.sessionToPlayer.delete(client.sessionId);this.rt.event({code:"PLAYER_DISCONNECTED",category:"presence",actorId:p.id,message:`${p.name} saiu; perfil preservado para recuperação.`});if(p.id===this.state.hostId)this.scheduleHostSuccession();this.scheduleSave();}
   private scheduleHostSuccession(){if(this.hostSuccessionTimer)clearTimeout(this.hostSuccessionTimer);this.hostSuccessionTimer=setTimeout(()=>{const host=this.state.players.get(this.state.hostId);if(host?.connected)return;const next=[...this.state.players.values()].find(p=>p.connected&&!p.bankrupt);if(!next)return;const previous=this.state.hostId;this.state.hostId=next.id;this.rt.event({code:"ADMIN_SUCCESSION",category:"admin",actorId:next.id,targetPlayerId:previous,message:`${next.name} assumiu a administração após ausência prolongada do ADM.`,metadata:{classification:"APP_BEHAVIOR",absenceMs:90_000}});this.broadcast("admin_transferred",{from:this.state.players.get(previous)?.name||"ADM ausente",to:next.name,automatic:true});this.scheduleSave();},90_000);}
+
+  private backup(client:Client){if(!this.rt.requireAdmin(client))return;void this.sendBackup(client);}
+  private async sendBackup(client:Client){try{await this.saveNow(true);const backup=sanitizeForExport(serialize(this.state,this.pinHash));client.send("backup",{filename:`BancoMundo-${this.state.saveCode}-v${APP_VERSION}.json`,content:JSON.stringify(backup,null,2)});}catch(error){client.send("error",error instanceof Error?`Falha ao gerar backup: ${error.message}`:"Falha ao gerar backup.");}}
 
   private report(client:Client){
     const requester=this.rt.me(client);if(!this.state.winnerId&&requester.id!==this.state.hostId){client.send("error","Somente o ADM pode exportar relatório antes do encerramento da partida.");return;}

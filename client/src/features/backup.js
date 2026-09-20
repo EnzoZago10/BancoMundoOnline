@@ -1,3 +1,33 @@
-export function downloadJson(content,filename="Banco-Mundo-0.9.3.json"){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([content],{type:"application/json"}));a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
-export async function exportBackup({apiBase,room,pin,toast}){try{const response=await fetch(`${apiBase}/api/saves/${room.state.saveCode}/export`,{method:"POST",headers:{"X-Room-Pin":pin}});if(!response.ok)throw Error("Não foi possível autorizar o backup.");downloadJson(JSON.stringify(await response.json(),null,2),`BancoMundo-${room.state.saveCode}-v0.9.3.json`);}catch(error){toast(error.message||"Falha ao exportar backup.","error");}}
-export async function importBackup({apiBase,file,pin,$,toast}){if(!file)return toast("Selecione um backup JSON.");if(!pin)return toast("Informe um PIN no campo da entrada para proteger a partida importada.");try{const raw=JSON.parse(await file.text()),response=await fetch(`${apiBase}/api/import`,{method:"POST",headers:{"Content-Type":"application/json","X-Room-Pin":pin},body:JSON.stringify(raw)}),data=await response.json();if(!response.ok)throw Error(data.error||"Falha ao importar backup.");$("#code").value=data.saveCode;const result=$("#importResult");result.classList.remove("hidden");const profiles=Array.isArray(data.recoveryProfiles)?data.recoveryProfiles:[];result.replaceChildren();const strong=document.createElement("strong");strong.textContent="Backup importado com sucesso.";result.append(strong);const codeLine=document.createElement("div");codeLine.textContent=`Código da nova partida: ${data.saveCode}`;result.append(codeLine);if(profiles.length){const warning=document.createElement("div");warning.className="small";warning.textContent="Novos códigos de recuperação foram gerados. Guarde-os agora; eles não serão exibidos novamente.";result.append(warning);const list=document.createElement("ul");for(const profile of profiles){const item=document.createElement("li");item.textContent=`${profile.name}: ${profile.recoveryToken}`;list.append(item);}result.append(list);}toast(`Backup importado com código ${data.saveCode}`);}catch(error){toast(error.message||"Falha ao importar backup.","error");}}
+export function downloadJson(content,filename="Banco-Mundo-0.9.3.json"){
+  const text=typeof content==="string"?content:JSON.stringify(content,null,2),url=URL.createObjectURL(new Blob([text],{type:"application/json"})),a=document.createElement("a");
+  a.href=url;a.download=filename;a.style.display="none";document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+
+export async function importBackup({apiBase,file,pin="",toast,onImported}){
+  if(!file){toast("Selecione um backup JSON.","warning");return null;}
+  try{
+    const raw=JSON.parse(await file.text()),headers={"Content-Type":"application/json"};
+    const response=await fetch(`${apiBase}/api/import`,{method:"POST",headers,body:JSON.stringify({backup:raw,pin})}),data=await response.json();
+    if(!response.ok)throw Error(data.error||"Falha ao importar backup.");
+    onImported?.(data);toast(`Backup restaurado com código ${data.saveCode}.`,"success");return data;
+  }catch(error){toast(error.message||"Falha ao importar backup.","error");return null;}
+}
+
+export function renderImportedBackup({result,data,onChooseProfile}){
+  if(!result||!data)return;result.classList.remove("hidden");result.replaceChildren();
+  const strong=document.createElement("strong");strong.textContent="Backup restaurado com sucesso.";result.append(strong);
+  const codeLine=document.createElement("div");codeLine.textContent=`Código da nova partida: ${data.saveCode}`;result.append(codeLine);
+  const profiles=Array.isArray(data.recoveryProfiles)?data.recoveryProfiles:[];
+  if(!profiles.length)return;
+  const warning=document.createElement("div");warning.className="small";warning.textContent="Escolha seu perfil para continuar. Novos códigos de recuperação foram gerados; guarde e envie o código correto para cada amigo.";result.append(warning);
+  const list=document.createElement("div");list.className="restore-profile-list";
+  for(const profile of profiles){
+    const row=document.createElement("div");row.className="restore-profile";
+    const identity=document.createElement("div"),name=document.createElement("strong"),token=document.createElement("code");name.textContent=profile.name;token.textContent=profile.recoveryToken;identity.append(name,token);
+    const actions=document.createElement("div");actions.className="row";
+    const copy=document.createElement("button");copy.type="button";copy.textContent="Copiar código";copy.addEventListener("click",async()=>{try{await navigator.clipboard.writeText(profile.recoveryToken);}catch{};});actions.append(copy);
+    if(onChooseProfile){const enter=document.createElement("button");enter.type="button";enter.className="primary";enter.textContent=`Entrar como ${profile.name}`;enter.addEventListener("click",()=>onChooseProfile(profile,data));actions.append(enter);}
+    row.append(identity,actions);list.append(row);
+  }
+  result.append(list);
+}
